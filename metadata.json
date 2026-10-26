@@ -1,0 +1,7 @@
+{
+  "name": "ResumeDrop",
+  "description": "Resume-to-Excel automation system extracting candidate profiles, education, work experience, projects, and skills into formatted 5-sheet workbooks.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

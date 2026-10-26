@@ -1,24 +1,14 @@
 """
 src/excel_exporter.py
 =====================
-Phase 3: Excel workbook generation from validated CandidateRecord objects.
+Phase 3: Formatted 5-worksheet Excel workbook generation using openpyxl.
 
-Produces a .xlsx workbook with five worksheets:
+Worksheets:
   1. Candidates      — one row per candidate (summary)
-  2. Education       — one row per education record
+  2. Education       — one row per qualification
   3. Work Experience — one row per job
   4. Projects        — one row per project
-  5. Processing Log  — one row per file (incl. failures)
-
-Design choices:
-- All generation happens in memory; no temp files needed.
-- export_to_bytes() is the primary API, used by Streamlit download.
-- export_to_file() is a thin wrapper for CLI use.
-- Formula-injection sanitisation is applied at write time via
-  src.validator.sanitise_formula_injection — CandidateRecord data
-  is never mutated.
-- Phone numbers are always written as text (string prefix).
-- Missing values become blank cells (empty string "").
+  5. Processing Log  — audit trail of all processed documents & failures
 """
 
 from __future__ import annotations
@@ -38,30 +28,21 @@ from src.validator import sanitise_formula_injection
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Style constants
-# ---------------------------------------------------------------------------
-
 _HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
-_HEADER_FILL = PatternFill(fill_type="solid", fgColor="1F497D")   # dark blue
+_HEADER_FILL = PatternFill(fill_type="solid", fgColor="1F497D")  # dark blue
 _WRAP_ALIGN = Alignment(wrap_text=True, vertical="top")
 _TOP_ALIGN = Alignment(vertical="top")
 
 _STATUS_COLOURS: dict[str, str] = {
-    "success":          "C6EFCE",   # light green
-    "partial":          "FFEB9C",   # light amber
-    "review_required":  "FFEB9C",   # light amber
-    "failed":           "FFC7CE",   # light red
-    "pending":          "DDDDDD",   # grey
+    "success": "C6EFCE",  # light green
+    "partial": "FFEB9C",  # light amber
+    "review_required": "FFEB9C",  # light amber
+    "failed": "FFC7CE",  # light red
+    "pending": "DDDDDD",  # grey
 }
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
 def _safe(value: Optional[str]) -> str:
-    """Return a sanitised, non-None string safe for an Excel cell."""
     if value is None:
         return ""
     sanitised = sanitise_formula_injection(str(value))
@@ -69,7 +50,6 @@ def _safe(value: Optional[str]) -> str:
 
 
 def _safe_phone(phone: Optional[str]) -> str:
-    """Return phone as a plain string.  Never let openpyxl treat it as a number."""
     return _safe(phone)
 
 
@@ -78,7 +58,6 @@ def _join(items: list[str], sep: str = "; ") -> str:
 
 
 def _style_header_row(ws, col_count: int) -> None:
-    """Apply bold header styling to row 1 of a worksheet."""
     for col in range(1, col_count + 1):
         cell = ws.cell(row=1, column=col)
         cell.font = _HEADER_FONT
@@ -87,7 +66,6 @@ def _style_header_row(ws, col_count: int) -> None:
 
 
 def _freeze_and_filter(ws, col_count: int) -> None:
-    """Freeze header row and add autofilter."""
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(col_count)}1"
 
@@ -98,25 +76,12 @@ def _set_column_widths(ws, widths: list[int]) -> None:
 
 
 def _colour_status_cell(cell, status: str) -> None:
-    colour = _STATUS_COLOURS.get(status.lower(), "FFFFFF")
+    colour = _STATUS_COLOURS.get(str(status).lower(), "FFFFFF")
     cell.fill = PatternFill(fill_type="solid", fgColor=colour)
 
 
-# ---------------------------------------------------------------------------
-# Worksheet builders
-# ---------------------------------------------------------------------------
-
-def _get_highest_education(records: list[EducationRecord]) -> Optional[EducationRecord]:
-    """Return the candidate's highest educational credential.
-
-    Ranks by credential level:
-      5: Ph.D. / Doctorate
-      4: Master's / Post Graduate (M.Tech, M.S., M.Sc., MCA, MBA)
-      3: Bachelor's (B.Tech, B.E., B.S., B.Sc., BCA, BBA, B.Com, B.A.)
-      2: Diploma / Polytechnic
-      1: Secondary / High School (HSC, SSC, 12th, 10th)
-    Falls back to the first record if none match.
-    """
+def get_highest_education(records: list[EducationRecord]) -> Optional[EducationRecord]:
+    """Rank credentials: Ph.D. > Master's > Bachelor's > Diploma > High School."""
     if not records:
         return None
 
@@ -163,17 +128,13 @@ def _build_candidates_sheet(wb: openpyxl.Workbook, records: list[CandidateRecord
     _style_header_row(ws, len(headers))
 
     for rec in records:
-        # Highest qualification record
-        highest_edu = _get_highest_education(rec.education)
-
-        # All education as a readable summary
+        highest_edu = get_highest_education(rec.education)
         all_edu = _join([
             " | ".join(filter(None, [
                 e.qualification, e.specialization, e.institution, e.graduation_year
             ]))
             for e in rec.education
         ])
-
         status = rec.metadata.processing_status
 
         row = [
@@ -181,7 +142,7 @@ def _build_candidates_sheet(wb: openpyxl.Workbook, records: list[CandidateRecord
             _safe(rec.resume_filename),
             _safe(rec.full_name),
             _safe(rec.email),
-            _safe_phone(rec.phone),          # always text
+            _safe_phone(rec.phone),
             _safe(rec.location),
             _safe(highest_edu.qualification if highest_edu else None),
             _safe(highest_edu.specialization if highest_edu else None),
@@ -202,26 +163,23 @@ def _build_candidates_sheet(wb: openpyxl.Workbook, records: list[CandidateRecord
             _join(rec.metadata.validation_issues),
             _join(rec.metadata.review_notes),
         ]
-
         ws.append(row)
 
-        # Colour the status cell (column 20)
         status_cell = ws.cell(row=ws.max_row, column=20)
         _colour_status_cell(status_cell, status)
 
-        # Wrap long text columns
         for col in (11, 12, 13, 14, 16, 22, 23, 24):
             ws.cell(row=ws.max_row, column=col).alignment = _WRAP_ALIGN
 
     _freeze_and_filter(ws, len(headers))
     _set_column_widths(ws, [
-        14, 24, 22, 28, 16, 20,  # ID, filename, name, email, phone, location
-        22, 20, 26, 14, 40,      # qual, spec, inst, grad_year, all_edu
-        30, 26, 26,              # skills, langs, tools
-        10, 30,                  # exp count, certs
-        30, 30, 30,              # linkedin, github, portfolio
-        18, 14,                  # status, method
-        24, 40, 32,              # missing, issues, notes
+        14, 24, 22, 28, 16, 20,
+        22, 20, 26, 14, 40,
+        30, 26, 26,
+        10, 30,
+        30, 30, 30,
+        18, 14,
+        24, 40, 32,
     ])
 
 
@@ -264,11 +222,10 @@ def _build_experience_sheet(wb: openpyxl.Workbook, records: list[CandidateRecord
 
     for rec in records:
         for exp in rec.work_experience:
-            responsibilities = _join(exp.responsibilities, "\n• ")
-            if responsibilities:
-                responsibilities = "• " + responsibilities
-
-            row = [
+            resp_str = _join(exp.responsibilities, "\n• ")
+            if resp_str:
+                resp_str = "• " + resp_str
+            ws.append([
                 _safe(rec.candidate_id),
                 _safe(rec.resume_filename),
                 _safe(rec.full_name),
@@ -276,11 +233,9 @@ def _build_experience_sheet(wb: openpyxl.Workbook, records: list[CandidateRecord
                 _safe(exp.job_title),
                 _safe(exp.start_date),
                 _safe(exp.end_date),
-                _safe(responsibilities),
+                _safe(resp_str),
                 _safe(exp.description),
-            ]
-            ws.append(row)
-            # Wrap responsibilities and description
+            ])
             for col in (8, 9):
                 ws.cell(row=ws.max_row, column=col).alignment = _WRAP_ALIGN
 
@@ -299,15 +254,14 @@ def _build_projects_sheet(wb: openpyxl.Workbook, records: list[CandidateRecord])
 
     for rec in records:
         for proj in rec.projects:
-            row = [
+            ws.append([
                 _safe(rec.candidate_id),
                 _safe(rec.resume_filename),
                 _safe(rec.full_name),
                 _safe(proj.name),
                 _safe(proj.description),
                 _join(proj.technologies),
-            ]
-            ws.append(row)
+            ])
             ws.cell(row=ws.max_row, column=5).alignment = _WRAP_ALIGN
 
     _freeze_and_filter(ws, len(headers))
@@ -319,14 +273,6 @@ def _build_log_sheet(
     records: list[CandidateRecord],
     failed_docs: Optional[list[dict]] = None,
 ) -> None:
-    """Build the Processing Log sheet.
-
-    Args:
-        records:     Successful / partial candidate records.
-        failed_docs: Optional list of dicts for documents that failed Phase 1.
-                     Each dict must have: filename, doc_status, error (optional),
-                     char_count (optional).
-    """
     ws = wb.create_sheet("Processing Log")
     headers = [
         "Resume Filename", "Document Status", "Extraction Status",
@@ -341,13 +287,13 @@ def _build_log_sheet(
         status = rec.metadata.processing_status
         row = [
             _safe(rec.resume_filename),
-            "success",                          # Phase 1 succeeded
+            "success",
             _safe(status),
             _safe(rec.metadata.extraction_method),
             len(rec.raw_text_snippet or "") * 10 if rec.raw_text_snippet else 0,
             _join(rec.metadata.missing_fields, ", "),
             _join(rec.metadata.validation_issues),
-            "",                                 # no failure reason
+            "",
             _safe(rec.metadata.extracted_at),
         ]
         ws.append(row)
@@ -374,36 +320,17 @@ def _build_log_sheet(
     _freeze_and_filter(ws, len(headers))
     _set_column_widths(ws, [28, 18, 18, 16, 18, 24, 40, 40, 26])
 
-    # Wrap long cells
     for row in ws.iter_rows(min_row=2):
         for cell in row:
             if cell.column in (6, 7, 8):
                 cell.alignment = _WRAP_ALIGN
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 def export_to_bytes(
     records: Sequence[CandidateRecord],
     failed_docs: Optional[list[dict]] = None,
 ) -> bytes:
-    """Generate an Excel workbook and return its contents as bytes.
-
-    This is the primary API used by the Streamlit download button.
-    No temporary files are created.
-
-    Args:
-        records:     Validated :class:`~schemas.candidate.CandidateRecord` objects.
-        failed_docs: Optional list of failure info dicts for documents that
-                     failed Phase 1 text extraction.  Each dict should have:
-                     ``filename``, ``doc_status``, ``error``, ``char_count``.
-
-    Returns:
-        Raw bytes of a valid ``.xlsx`` workbook.
-    """
+    """Generate in-memory .xlsx workbook bytes."""
     record_list = list(records)
     wb = openpyxl.Workbook()
 
@@ -416,11 +343,6 @@ def export_to_bytes(
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
-    logger.info(
-        "Exported %d candidate record(s) to Excel (%d bytes).",
-        len(record_list),
-        buf.getbuffer().nbytes,
-    )
     return buf.read()
 
 
@@ -429,21 +351,9 @@ def export_to_file(
     output_path: str | Path,
     failed_docs: Optional[list[dict]] = None,
 ) -> Path:
-    """Write an Excel workbook to *output_path* on disk.
-
-    Thin wrapper around :func:`export_to_bytes` — all generation logic lives
-    there.
-
-    Args:
-        records:     Validated candidate records.
-        output_path: Destination file path.  Parent directories must exist.
-        failed_docs: Optional list of Phase 1 failure info dicts.
-
-    Returns:
-        The resolved :class:`~pathlib.Path` of the written file.
-    """
+    """Write an Excel workbook to disk."""
     path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     data = export_to_bytes(records, failed_docs=failed_docs)
     path.write_bytes(data)
-    logger.info("Workbook written to %s", path)
     return path

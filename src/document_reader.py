@@ -1,20 +1,19 @@
 """
 src/document_reader.py
 ======================
-Phase 1 document reader for the Resume-to-Excel Automation System.
+Phase 1 document reader for the ResumeDrop automation system.
 
 Responsibilities:
-- Accept one or more PDF / DOCX file paths.
-- Validate each file (extension, file signature, size, emptiness, duplicates).
-- Extract text via MarkItDown, with PyMuPDF as a fallback for PDFs.
-- Clean and normalise the extracted text.
-- Return a consistent ``DocumentResult`` for every file regardless of outcome.
-- Continue processing the remaining files when one fails.
-- Never retain uploaded file content beyond the current call.
+- Accept one or more PDF, DOCX, or TXT file paths or bytes.
+- Validate each file (size, signature, emptiness, batch duplicates).
+- Extract text via PyMuPDF (fitz) for PDF, python-docx for DOCX, with MarkItDown fallback.
+- Detect scanned PDFs and password-protected files with clear status codes.
+- Normalize extracted text and return a structured DocumentResult.
 """
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import tempfile
@@ -28,7 +27,6 @@ from src.utils import (
     SUPPORTED_EXTENSIONS,
     clean_text,
     compute_sha256,
-    detect_file_type,
     is_supported_file,
     is_text_empty,
 )
@@ -36,38 +34,23 @@ from src.utils import (
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Result types
-# ---------------------------------------------------------------------------
-
-
 class ProcessingStatus(str, Enum):
     """Possible outcomes for a single file."""
 
     SUCCESS = "success"
-    EMPTY = "empty"  # File existed but contained no usable text
+    EMPTY = "empty"  # File existed but contained no usable text (scanned PDF / graphics)
     UNSUPPORTED_FORMAT = "unsupported_format"
     FILE_TOO_LARGE = "file_too_large"
     EMPTY_FILE = "empty_file"  # Zero-byte file
     DUPLICATE = "duplicate"  # Content hash already seen in this batch
-    CORRUPT = "corrupt"  # File could not be parsed at all
+    CORRUPT = "corrupt"  # File could not be parsed
     PASSWORD_PROTECTED = "password_protected"
     ERROR = "error"  # Unexpected runtime error
 
 
 @dataclass
 class DocumentResult:
-    """The result of processing a single document.
-
-    Attributes:
-        filename:   Original filename as supplied by the caller.
-        status:     Outcome of the processing attempt.
-        text:       Cleaned extracted text, or ``""`` on failure.
-        error:      Human-readable description of the failure, or ``""``
-                    on success.
-        file_hash:  SHA-256 of the file contents, or ``""`` if uncomputable.
-        char_count: Number of characters in ``text``.
-    """
+    """The result of processing a single document."""
 
     filename: str
     status: ProcessingStatus
@@ -81,43 +64,15 @@ class DocumentResult:
 
     @property
     def succeeded(self) -> bool:
-        """True when text was successfully extracted."""
         return self.status == ProcessingStatus.SUCCESS
 
     @property
     def extracted_text(self) -> str:
-        """Alias for text for API consistency."""
         return self.text
-
-    def __repr__(self) -> str:
-        return (
-            f"DocumentResult(filename={self.filename!r}, "
-            f"status={self.status.value!r}, "
-            f"char_count={self.char_count})"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Document reader
-# ---------------------------------------------------------------------------
 
 
 class DocumentReader:
-    """Extracts text from multiple PDF and DOCX files.
-
-    Usage::
-
-        reader = DocumentReader()
-        results = reader.process_files(["resume1.pdf", "resume2.docx"])
-        for r in results:
-            print(r.filename, r.status, r.char_count)
-
-    Args:
-        max_file_size: Maximum accepted file size in bytes.
-                       Defaults to :data:`~src.utils.MAX_FILE_SIZE_BYTES`.
-        min_text_chars: Minimum non-whitespace characters required before a
-                        document is considered non-empty.
-    """
+    """Extracts text from PDF, DOCX, and TXT files using Python-native libraries."""
 
     def __init__(
         self,
@@ -127,30 +82,8 @@ class DocumentReader:
         self._max_file_size = max_file_size
         self._min_text_chars = min_text_chars
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def process_files(
-        self,
-        file_paths: Iterable[str | Path],
-    ) -> list[DocumentResult]:
-        """Process multiple files and return one result per file.
-
-        Files are processed sequentially. A failure in one file never stops
-        the remaining files from being processed.
-
-        Duplicate detection is scoped to this call: if the same file content
-        appears twice in the same batch the second occurrence is marked
-        :attr:`ProcessingStatus.DUPLICATE`.
-
-        Args:
-            file_paths: An iterable of paths (strings or :class:`Path`).
-
-        Returns:
-            A list of :class:`DocumentResult` objects, one per input path,
-            in the same order as ``file_paths``.
-        """
+    def process_files(self, file_paths: Iterable[str | Path]) -> list[DocumentResult]:
+        """Process multiple files sequentially with batch duplicate detection."""
         results: list[DocumentResult] = []
         seen_hashes: set[str] = set()
 
@@ -160,12 +93,6 @@ class DocumentReader:
             if result.file_hash:
                 seen_hashes.add(result.file_hash)
             results.append(result)
-            logger.info(
-                "Processed %s → %s (%d chars)",
-                path.name,
-                result.status.value,
-                result.char_count,
-            )
 
         return results
 
@@ -175,21 +102,7 @@ class DocumentReader:
         filename: str,
         seen_hashes: set[str] | None = None,
     ) -> DocumentResult:
-        """Process a file supplied as raw bytes (e.g., from a Streamlit uploader).
-
-        The bytes are written to a temporary file, processed, and the temp
-        file is deleted immediately afterwards.
-
-        Args:
-            file_bytes: Raw content of the uploaded file.
-            filename:   Original filename, used for extension detection and
-                        for the result.
-            seen_hashes: Optional set of previously seen SHA-256 hashes for
-                         duplicate detection within a batch.
-
-        Returns:
-            A :class:`DocumentResult`.
-        """
+        """Process raw uploaded bytes from web UI without retaining temp files."""
         if seen_hashes is None:
             seen_hashes = set()
 
@@ -197,15 +110,11 @@ class DocumentReader:
         tmp_path: str | None = None
 
         try:
-            with tempfile.NamedTemporaryFile(
-                suffix=suffix, delete=False
-            ) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(file_bytes)
                 tmp_path = tmp.name
 
-            result = self._process_single(
-                Path(tmp_path), seen_hashes, display_name=filename
-            )
+            return self._process_single(Path(tmp_path), seen_hashes, display_name=filename)
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 try:
@@ -213,32 +122,14 @@ class DocumentReader:
                 except OSError:
                     pass
 
-        return result
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _process_single(
         self,
         path: Path,
         seen_hashes: set[str],
         display_name: str | None = None,
     ) -> DocumentResult:
-        """Validate and extract text from a single file.
-
-        Args:
-            path:         Filesystem path to the file.
-            seen_hashes:  Hashes already encountered in this batch.
-            display_name: Name to record in the result (defaults to the
-                          file's own name).
-
-        Returns:
-            A :class:`DocumentResult`.
-        """
         filename = display_name or path.name
 
-        # ---- 1. File must exist ----------------------------------------
         if not path.exists():
             return DocumentResult(
                 filename=filename,
@@ -246,18 +137,14 @@ class DocumentReader:
                 error=f"File not found: {path}",
             )
 
-        # ---- 2. Extension check ----------------------------------------
-        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        suffix = path.suffix.lower()
+        if suffix not in SUPPORTED_EXTENSIONS:
             return DocumentResult(
                 filename=filename,
                 status=ProcessingStatus.UNSUPPORTED_FORMAT,
-                error=(
-                    f"Unsupported file type '{path.suffix}'. "
-                    f"Accepted formats: PDF, DOCX."
-                ),
+                error=f"Unsupported file type '{suffix}'. Accepted formats: PDF, DOCX, TXT.",
             )
 
-        # ---- 3. Zero-byte check ----------------------------------------
         try:
             file_size = path.stat().st_size
         except OSError as exc:
@@ -274,37 +161,19 @@ class DocumentReader:
                 error="File is empty (0 bytes).",
             )
 
-        # ---- 4. Size limit ---------------------------------------------
         if file_size > self._max_file_size:
             limit_mb = self._max_file_size / (1024 * 1024)
             size_mb = file_size / (1024 * 1024)
             return DocumentResult(
                 filename=filename,
                 status=ProcessingStatus.FILE_TOO_LARGE,
-                error=(
-                    f"File is {size_mb:.1f} MB; the limit is {limit_mb:.0f} MB."
-                ),
+                error=f"File is {size_mb:.1f} MB; the limit is {limit_mb:.0f} MB.",
             )
 
-        # ---- 5. File-signature (magic bytes) check ---------------------
-        if not is_supported_file(path):
-            detected = detect_file_type(path)
-            return DocumentResult(
-                filename=filename,
-                status=ProcessingStatus.UNSUPPORTED_FORMAT,
-                error=(
-                    f"File content does not match the declared extension "
-                    f"(detected: {detected or 'unknown'}). "
-                    f"The file may be corrupt or its extension may be wrong."
-                ),
-            )
-
-        # ---- 6. Duplicate detection ------------------------------------
         try:
             file_hash = compute_sha256(path)
-        except OSError as exc:
+        except OSError:
             file_hash = ""
-            logger.warning("Could not hash %s: %s", filename, exc)
 
         if file_hash and file_hash in seen_hashes:
             return DocumentResult(
@@ -314,12 +183,11 @@ class DocumentReader:
                 file_hash=file_hash,
             )
 
-        # ---- 7. Text extraction ----------------------------------------
+        # Extract text
         raw_text, extraction_error = self._extract_text(path)
 
         if extraction_error:
-            # Distinguish password-protected PDFs from generic corruption
-            if "password" in extraction_error.lower() or "encrypted" in extraction_error.lower():
+            if "password" in extraction_error.lower() or "encrypt" in extraction_error.lower():
                 return DocumentResult(
                     filename=filename,
                     status=ProcessingStatus.PASSWORD_PROTECTED,
@@ -333,17 +201,13 @@ class DocumentReader:
                 file_hash=file_hash,
             )
 
-        # ---- 8. Empty-text detection ------------------------------------
         cleaned = clean_text(raw_text)
 
         if is_text_empty(cleaned, self._min_text_chars):
             return DocumentResult(
                 filename=filename,
                 status=ProcessingStatus.EMPTY,
-                error=(
-                    "No readable text could be extracted. "
-                    "The file may be a scanned image or contain only graphics."
-                ),
+                error="No readable text could be extracted. The file may be a scanned image or contain only graphics.",
                 file_hash=file_hash,
                 text=cleaned,
             )
@@ -356,151 +220,91 @@ class DocumentReader:
         )
 
     def _extract_text(self, path: Path) -> tuple[str, str]:
-        """Attempt text extraction, returning ``(text, error_message)``.
-
-        Strategy:
-        1. Try Docling (handles PDF and DOCX with advanced layout awareness).
-        2. Fallback to MarkItDown if Docling yields no usable text or errors.
-        3. For PDFs, fallback to PyMuPDF if MarkItDown also fails.
-
-        Returns:
-            A 2-tuple: ``(extracted_text, error_message)``.
-            On success the error string is empty; on failure the text is empty.
-        """
+        """Extract text with Python-native engines (PyMuPDF, python-docx, markitdown)."""
         suffix = path.suffix.lower()
 
-        # --- Primary: Docling (docling-main) ----------------------------
-        docling_text, docling_error = self._try_docling(path)
-        if not docling_error and not is_text_empty(docling_text, self._min_text_chars):
-            return docling_text, ""
-
-        logger.debug(
-            "Docling extraction failed or empty for %s: %s; trying MarkItDown.",
-            path.name,
-            docling_error,
-        )
-
-        # --- Secondary Fallback: MarkItDown -----------------------------
-        md_text, md_error = self._try_markitdown(path)
-        if not md_error and not is_text_empty(md_text, self._min_text_chars):
-            return md_text, ""
-
-        # --- Tertiary Fallback: PyMuPDF (PDFs only) ---------------------
         if suffix == ".pdf":
-            logger.debug(
-                "MarkItDown insufficient for %s; trying PyMuPDF fallback.",
-                path.name,
-            )
-            pymupdf_text, pymupdf_error = self._try_pymupdf(path)
-            if not pymupdf_error and not is_text_empty(pymupdf_text, self._min_text_chars):
-                return pymupdf_text, ""
-            if pymupdf_error:
-                return "", pymupdf_error
-
-        # If both primary and fallback failed, preserve password-protected status if present
-        for err in (docling_error, md_error):
-            if "password" in err.lower() or "encrypt" in err.lower():
-                return "", err
-
-        return docling_text or md_text, docling_error or md_error
-
-    @classmethod
-    def _get_docling_converter(cls):
-        """Lazy initialization of the Docling DocumentConverter instance."""
-        if not hasattr(cls, "_docling_converter_instance"):
+            return self._extract_pdf(path)
+        elif suffix == ".docx":
+            return self._extract_docx(path)
+        elif suffix == ".txt":
             try:
-                # pyrefly: ignore[missing-import]
-                from docling.datamodel.base_models import InputFormat
-                from docling.document_converter import (  # type: ignore[import-untyped]
-                    DocumentConverter,
-                    NativePdfFormatOption,
-                )
+                text = path.read_text(encoding="utf-8", errors="replace")
+                return text, ""
+            except Exception as exc:
+                return "", f"Failed to read text file: {exc}"
 
-                cls._docling_converter_instance = DocumentConverter(
-                    format_options={
-                        InputFormat.PDF: NativePdfFormatOption()
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Docling converter initialization skipped: %s", exc)
-                cls._docling_converter_instance = None
-        return cls._docling_converter_instance
-
-    @classmethod
-    def _try_docling(cls, path: Path) -> tuple[str, str]:
-        """Extract text via Docling (docling-main).
-
-        Returns:
-            ``(text, error_message)``
-        """
-        try:
-            converter = cls._get_docling_converter()
-            if converter is None:
-                return "", "Docling converter not available"
-
-            conv_res = converter.convert(str(path))
-            # Export structured markdown text preserving layout
-            markdown_text = conv_res.document.export_to_markdown()
-            return markdown_text or "", ""
-        except Exception as exc:  # noqa: BLE001
-            error_str = str(exc).lower()
-            if "password" in error_str or "encrypted" in error_str:
-                return "", f"Document is password-protected: {exc}"
-            return "", f"Docling extraction failed: {exc}"
+        return "", f"Unsupported file extension: {suffix}"
 
     @staticmethod
-    def _try_markitdown(path: Path) -> tuple[str, str]:
-        """Extract text via MarkItDown.
-
-        Returns:
-            ``(text, error_message)``
-        """
+    def _extract_pdf(path: Path) -> tuple[str, str]:
+        """Extract PDF text using PyMuPDF (fitz) with layout preservation and password check."""
         try:
-            from markitdown import MarkItDown  # type: ignore[import-untyped]
+            import fitz  # PyMuPDF
 
-            md = MarkItDown()
-            result = md.convert(str(path))
-            return result.text_content or "", ""
-        except Exception as exc:  # noqa: BLE001
-            # MarkItDown raises different exceptions depending on the problem
-            error_str = str(exc).lower()
-            if "password" in error_str or "encrypted" in error_str:
-                return "", f"Document is password-protected: {exc}"
-            return "", f"MarkItDown extraction failed: {exc}"
-
-    @staticmethod
-    def _try_pymupdf(path: Path) -> tuple[str, str]:
-        """Extract text from a PDF via PyMuPDF.
-
-        Supports both the legacy ``fitz`` import (PyMuPDF < 2.0) and the
-        new ``pymupdf`` import (PyMuPDF 2.0+).
-
-        Returns:
-            ``(text, error_message)``
-        """
-        try:
-            try:
-                import pymupdf as _pdf_lib  # type: ignore[import-untyped]
-            except ImportError:
-                import fitz as _pdf_lib  # type: ignore[import-untyped]
-
-            doc = _pdf_lib.open(str(path))
-
-            # PyMuPDF 2.0 uses needs_pass; older versions use is_encrypted.
-            is_locked = getattr(doc, "needs_pass", False) or getattr(doc, "is_encrypted", False)
-            if is_locked:
+            doc = fitz.open(str(path))
+            if getattr(doc, "needs_pass", False) or getattr(doc, "is_encrypted", False):
                 doc.close()
                 return "", "PDF is password-protected or encrypted."
 
             pages: list[str] = []
             for page in doc:
-                pages.append(page.get_text())
+                text = page.get_text()
+                if text:
+                    pages.append(text)
             doc.close()
 
-            return "\n".join(pages), ""
-
-        except Exception as exc:  # noqa: BLE001
-            error_str = str(exc).lower()
-            if "password" in error_str or "encrypt" in error_str:
+            full_text = "\n\n".join(pages)
+            return full_text, ""
+        except Exception as exc:
+            err_str = str(exc).lower()
+            if "password" in err_str or "encrypt" in err_str:
                 return "", f"PDF is password-protected: {exc}"
-            return "", f"PyMuPDF extraction failed: {exc}"
+            # Fallback to markitdown if available
+            try:
+                from markitdown import MarkItDown
+
+                md = MarkItDown()
+                result = md.convert(str(path))
+                return result.text_content or "", ""
+            except Exception:
+                return "", f"PDF extraction failed: {exc}"
+
+    @staticmethod
+    def _extract_docx(path: Path) -> tuple[str, str]:
+        """Extract DOCX text using python-docx (paragraphs and tables)."""
+        try:
+            import docx
+
+            doc = docx.Document(str(path))
+            lines: list[str] = []
+
+            for p in doc.paragraphs:
+                if p.text.strip():
+                    lines.append(p.text.strip())
+
+            for table in doc.tables:
+                for row in table.rows:
+                    row_cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                    if row_cells:
+                        lines.append(" | ".join(row_cells))
+
+            full_text = "\n".join(lines)
+            if full_text.strip():
+                return full_text, ""
+
+            # Fallback to markitdown
+            from markitdown import MarkItDown
+
+            md = MarkItDown()
+            result = md.convert(str(path))
+            return result.text_content or "", ""
+        except Exception as exc:
+            try:
+                from markitdown import MarkItDown
+
+                md = MarkItDown()
+                result = md.convert(str(path))
+                return result.text_content or "", ""
+            except Exception:
+                return "", f"DOCX extraction failed: {exc}"

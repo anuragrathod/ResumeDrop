@@ -1,3 +1,11 @@
+"""
+app.py
+======
+ResumeDrop — Modernized Streamlit Web Interface.
+Resume-to-Excel automation system with Multi-Key Groq Pool, parallel batch processing,
+Apple-inspired typography & zero-pill design, and formatted 5-sheet workbook export.
+"""
+
 from __future__ import annotations
 
 import html
@@ -5,16 +13,13 @@ import io
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# pyrefly: ignore[missing-import]
 import streamlit as st
 
-# ---------------------------------------------------------------------------
-# Page configuration (must be the first Streamlit call)
-# ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="ResumeDrop",
     page_icon="📄",
@@ -22,9 +27,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Load environment variables
 try:
     import dotenv
-
     _env_path = Path(__file__).resolve().parent / ".env"
     if _env_path.exists():
         dotenv.load_dotenv(dotenv_path=_env_path, override=True)
@@ -33,34 +38,6 @@ try:
 except ImportError:
     pass
 
-
-def _save_groq_key_to_env(key: str) -> bool:
-    """Save GROQ_API_KEY into the local .env file so the user only enters it once."""
-    env_file = Path(__file__).resolve().parent / ".env"
-    clean_key = key.strip()
-    if not clean_key:
-        return False
-
-    lines = []
-    found = False
-    if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            if line.startswith("GROQ_API_KEY="):
-                lines.append(f"GROQ_API_KEY={clean_key}")
-                found = True
-            else:
-                lines.append(line)
-    if not found:
-        lines.append(f"GROQ_API_KEY={clean_key}")
-
-    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.environ["GROQ_API_KEY"] = clean_key
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Domain Imports
-# ---------------------------------------------------------------------------
 from schemas.candidate import (
     CandidateRecord,
     EducationRecord,
@@ -72,6 +49,7 @@ from src.ai_extractor import (
     DEFAULT_GROQ_MODEL,
     AIConfig,
     AIExtractor,
+    GroqKeyPool,
     check_groq_available,
     list_groq_models,
 )
@@ -80,11 +58,8 @@ from src.excel_exporter import export_to_bytes
 from src.resume_parser import ResumeParser
 from src.validator import validate_candidate
 
-logging.basicConfig(level=logging.WARNING)
+logging.basicConfig(level=logging.INFO)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 MAX_FILE_SIZE_MB = 10
 _AVAILABLE_MODELS = [
     "openai/gpt-oss-120b",
@@ -93,15 +68,15 @@ _AVAILABLE_MODELS = [
 ]
 
 _STATUS_CONFIG = {
-    "success": {"label": "Verified", "dot": "green", "badge_class": "badge-success"},
-    "partial": {"label": "Partial", "dot": "orange", "badge_class": "badge-warning"},
-    "review_required": {"label": "Needs Review", "dot": "orange", "badge_class": "badge-warning"},
-    "failed": {"label": "Failed", "dot": "red", "badge_class": "badge-danger"},
-    "pending": {"label": "Pending", "dot": "grey", "badge_class": "badge-neutral"},
+    "success": {"label": "Verified", "color": "#248a3d", "bg": "rgba(36, 138, 61, 0.12)"},
+    "partial": {"label": "Partial", "color": "#b25000", "bg": "rgba(178, 80, 0, 0.12)"},
+    "review_required": {"label": "Needs Review", "color": "#b25000", "bg": "rgba(178, 80, 0, 0.12)"},
+    "failed": {"label": "Failed", "color": "#d70015", "bg": "rgba(215, 0, 21, 0.12)"},
+    "pending": {"label": "Pending", "color": "#6e6e73", "bg": "rgba(0, 0, 0, 0.06)"},
 }
 
 # ---------------------------------------------------------------------------
-# Design system: one light neutral theme, one accent, one radius scale
+# Design System: Apple / SF Pro Typography, Zero-Pill Discipline
 # ---------------------------------------------------------------------------
 st.markdown("""
 <style>
@@ -120,33 +95,24 @@ st.markdown("""
     --bad: #d70015;
     --radius: 12px;
     --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
-            "Helvetica Neue", Helvetica, Arial, sans-serif;
+            "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
-/* Typography (scoped so icon fonts keep working) */
-.stApp,
-.stApp :where(p, li, label, input, textarea, button, summary, h1, h2, h3, h4, td, th) {
+.stApp, .stApp :where(p, li, label, input, textarea, button, summary, h1, h2, h3, h4, td, th) {
     font-family: var(--font);
     -webkit-font-smoothing: antialiased;
 }
-[data-testid="stIconMaterial"] {
-    font-family: "Material Symbols Rounded", "Material Symbols Outlined" !important;
-}
 
-/* Canvas */
 .stApp { background: var(--bg); color: var(--text); }
 header[data-testid="stHeader"] { background: transparent; }
 #MainMenu, footer { visibility: hidden; }
 .block-container {
     max-width: 1080px;
-    padding: 2.5rem clamp(1rem, 4vw, 2.5rem) 4rem !important;
+    padding: 2.25rem clamp(1rem, 4vw, 2.5rem) 4rem !important;
 }
 
-/* Headings */
 h1, h2, h3 { color: var(--text) !important; letter-spacing: -0.025em !important; }
-h3 { font-size: 1.3rem !important; font-weight: 600 !important; padding-top: 2.25rem !important; }
-[data-testid="stHeaderActionElements"] { display: none; }
-[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color: var(--muted); }
+h3 { font-size: 1.25rem !important; font-weight: 600 !important; padding-top: 1.75rem !important; }
 
 .rd-title {
     font-size: clamp(2rem, 4.5vw, 2.75rem);
@@ -161,32 +127,53 @@ h3 { font-size: 1.3rem !important; font-weight: 600 !important; padding-top: 2.2
     line-height: 1.5;
     color: var(--muted);
     margin: 0 0 1.75rem 0;
-    max-width: 38rem;
+    max-width: 42rem;
 }
-.rd-brand { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 1.5rem 0; }
-.rd-status { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--text); margin: 0.25rem 0 0.25rem 0; }
-.rd-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.rd-brand {
+    font-size: 1.2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 1.25rem 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.rd-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--text);
+    margin: 0.25rem 0;
+    font-weight: 500;
+}
+.rd-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex: none;
+}
 .rd-dot.ok { background: var(--ok); }
 .rd-dot.warn { background: var(--warn); }
+.rd-dot.bad { background: var(--bad); }
+
 .rd-note { font-size: 0.8rem; color: var(--muted); line-height: 1.5; margin: 0 0 1rem 0; }
-.rd-link { color: var(--accent); text-decoration: none; font-size: 0.9rem; font-weight: 500; }
-.rd-link:hover { text-decoration: underline; }
-.rd-progress-line { font-size: 0.85rem; margin: 4px 0; }
+.rd-progress-line { font-size: 0.85rem; margin: 4px 0; font-family: monospace; }
 .rd-progress-line.ok { color: var(--ok); }
 .rd-progress-line.bad { color: var(--bad); }
 
 /* Sidebar */
 [data-testid="stSidebar"] { background: var(--sidebar); border-right: 1px solid var(--line); }
-[data-testid="stSidebar"] > div:first-child { padding: 1rem 0.5rem; }
-[data-testid="stSidebar"] hr { margin: 1.25rem 0; border-color: var(--line); }
+[data-testid="stSidebar"] > div:first-child { padding: 1.25rem 1rem; }
 
-/* Metrics: plain figures, no boxes */
+/* Metrics */
 [data-testid="stMetric"] {
     background: transparent;
     border: none;
     border-top: 1px solid var(--line);
     border-radius: 0;
-    padding: 0.9rem 0 0 0;
+    padding: 0.85rem 0 0 0;
     box-shadow: none;
 }
 [data-testid="stMetricLabel"] p { font-size: 0.85rem; font-weight: 500; color: var(--muted); }
@@ -195,6 +182,7 @@ h3 { font-size: 1.3rem !important; font-weight: 600 !important; padding-top: 2.2
     font-weight: 600;
     letter-spacing: -0.03em;
     color: var(--text);
+    font-variant-numeric: tabular-nums;
 }
 
 /* Buttons */
@@ -215,52 +203,21 @@ h3 { font-size: 1.3rem !important; font-weight: 600 !important; padding-top: 2.2
 .stButton > button:hover,
 .stFormSubmitButton > button:hover,
 .stDownloadButton > button:hover {
-    background: #f5f5f7 !important;
-    border-color: rgba(0, 0, 0, 0.35) !important;
+    background: #f0f0f2 !important;
 }
 .stButton > button[kind="primary"],
 .stDownloadButton > button[kind="primary"],
-.stFormSubmitButton > button[kind="primary"],
-button[data-testid="stBaseButton-primary"] {
+.stFormSubmitButton > button[kind="primary"] {
     background: var(--accent) !important;
     border-color: var(--accent) !important;
     color: #ffffff !important;
 }
 .stButton > button[kind="primary"]:hover,
-.stDownloadButton > button[kind="primary"]:hover,
-.stFormSubmitButton > button[kind="primary"]:hover,
-button[data-testid="stBaseButton-primary"]:hover {
+.stDownloadButton > button[kind="primary"]:hover {
     background: var(--accent-hover) !important;
-    border-color: var(--accent-hover) !important;
 }
 .stButton > button[kind="primary"] p,
-.stDownloadButton > button[kind="primary"] p,
-button[data-testid="stBaseButton-primary"] p { color: #ffffff !important; }
-.stButton > button:disabled,
-.stDownloadButton > button:disabled {
-    background: #f2f2f7 !important;
-    border-color: var(--line) !important;
-    color: #8e8e93 !important;
-    cursor: not-allowed;
-}
-button:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-summary:focus-visible {
-    outline: 3px solid rgba(0, 113, 227, 0.3) !important;
-    outline-offset: 2px;
-}
-
-/* File uploader */
-[data-testid="stFileUploader"] section {
-    background: var(--surface);
-    border: 1.5px dashed var(--line-strong);
-    border-radius: 16px;
-    padding: 1.5rem 1.25rem;
-    transition: border-color 0.15s ease;
-}
-[data-testid="stFileUploader"] section:hover { border-color: var(--accent); }
-[data-testid="stFileUploader"] small { color: var(--muted); }
+.stDownloadButton > button[kind="primary"] p { color: #ffffff !important; }
 
 /* File list */
 .rd-files { display: flex; flex-wrap: wrap; gap: 8px; margin: 0.75rem 0 1rem 0; }
@@ -273,79 +230,35 @@ summary:focus-visible {
     color: var(--text);
 }
 .rd-file span { color: var(--muted); margin-left: 6px; font-size: 0.75rem; }
-.rd-file.dup { border-color: rgba(178, 80, 0, 0.45); }
-.rd-file.dup span { color: var(--warn); }
+.rd-file.dup { border-color: rgba(178, 80, 0, 0.45); color: var(--warn); }
 
 /* Expanders */
-[data-testid="stExpander"] { border: none !important; background: transparent; margin-bottom: 0.6rem; }
 [data-testid="stExpander"] details {
     background: var(--surface);
     border: 1px solid var(--line) !important;
     border-radius: var(--radius) !important;
-    box-shadow: none;
 }
-[data-testid="stExpander"] summary { padding: 0.85rem 1rem; font-weight: 500; color: var(--text); }
-[data-testid="stExpander"] summary:hover { background: #fafafc; border-radius: var(--radius); }
-[data-testid="stExpanderDetails"] { padding: 0.5rem 1rem 1.25rem 1rem; }
-
-/* Forms and inputs */
-div[data-testid="stForm"] { border: none; padding: 0; background: transparent; }
-div[data-baseweb="input"],
-div[data-baseweb="textarea"],
-div[data-baseweb="select"] > div {
-    background: var(--surface) !important;
-    border-color: var(--line) !important;
-    border-radius: 10px !important;
-}
-div[data-baseweb="input"]:focus-within,
-div[data-baseweb="textarea"]:focus-within,
-div[data-baseweb="select"] > div:focus-within {
-    border-color: var(--accent) !important;
-    box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15);
-}
-input, textarea { color: var(--text) !important; background: transparent !important; }
-label[data-testid="stWidgetLabel"] p { color: var(--text); font-size: 0.85rem; font-weight: 500; }
-div[data-baseweb="popover"] ul[role="listbox"] {
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-}
-li[role="option"]:hover, li[role="option"][aria-selected="true"] { background: var(--sidebar) !important; }
-
-/* Alerts, progress, tables */
-[data-testid="stAlert"] { border-radius: var(--radius); box-shadow: none; }
-[data-testid="stAlert"] p { font-size: 0.88rem; }
-[data-testid="stProgress"] > div { background: rgba(0, 0, 0, 0.06); border-radius: 980px; height: 6px; }
-[data-testid="stProgress"] > div > div { background: var(--accent); border-radius: 980px; }
-[data-testid="stDataFrame"] {
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    overflow: hidden;
-}
-
-/* Small screens */
-@media (max-width: 640px) {
-    .block-container { padding-top: 1.5rem !important; }
-    .stButton > button, .stFormSubmitButton > button, .stDownloadButton > button { width: 100%; }
-    h3 { padding-top: 1.5rem !important; }
-}
-@media (prefers-reduced-motion: reduce) {
-    * { transition: none !important; }
-}
+[data-testid="stExpander"] summary { padding: 0.85rem 1rem; font-weight: 500; }
 </style>
 """, unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # Session State Initialization
 # ---------------------------------------------------------------------------
+
+
 def _init_state() -> None:
     defaults = {
-        "candidates":   [],       # list[CandidateRecord]
-        "failed_docs":  [],       # list[dict]
-        "processed":    False,
-        "upload_key":   0,        # increment to reset uploader
-        "edited":       {},       # filename → edited CandidateRecord
+        "candidates": [],
+        "failed_docs": [],
+        "processed": False,
+        "upload_key": 0,
+        "edited": {},
         "selected_model": DEFAULT_GROQ_MODEL,
+        "custom_keys_text": "",
+        "max_workers": 3,
+        "rules_only": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -356,86 +269,164 @@ _init_state()
 
 
 def _reset_workspace() -> None:
-    st.session_state.candidates  = []
+    st.session_state.candidates = []
     st.session_state.failed_docs = []
-    st.session_state.processed   = False
-    st.session_state.edited      = {}
+    st.session_state.processed = False
+    st.session_state.edited = {}
     st.session_state.upload_key += 1
-    st.rerun()  
+    st.rerun()
 
 
 # ---------------------------------------------------------------------------
-# AI Resource Loader (Groq Only, API key read silently from environment)
+# Key Pool Manager
 # ---------------------------------------------------------------------------
+
+
+def _save_keys_to_env(keys_str: str) -> None:
+    """Save provided Groq keys to .env file for persistence."""
+    env_file = Path(__file__).resolve().parent / ".env"
+    cleaned_keys = [k.strip() for k in re.split(r"[,;\s\n]+", keys_str) if k.strip().startswith("gsk_")]
+    if not cleaned_keys:
+        return
+
+    joined = ", ".join(cleaned_keys)
+    lines = []
+    found = False
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if line.startswith("GROQ_API_KEYS="):
+                lines.append(f"GROQ_API_KEYS={joined}")
+                found = True
+            elif line.startswith("GROQ_API_KEY=") and not found:
+                lines.append(f"GROQ_API_KEY={cleaned_keys[0]}")
+            else:
+                lines.append(line)
+    if not found:
+        lines.append(f"GROQ_API_KEYS={joined}")
+        lines.append(f"GROQ_API_KEY={cleaned_keys[0]}")
+
+    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.environ["GROQ_API_KEYS"] = joined
+    os.environ["GROQ_API_KEY"] = cleaned_keys[0]
+
+
 @st.cache_resource(show_spinner=False)
-def _get_groq_extractor(model: str) -> tuple[Optional[AIExtractor], bool, str]:
-    """Instantiate Groq AIExtractor using GROQ_API_KEY from environment."""
-    api_key = os.environ.get("GROQ_API_KEY")
-    config = AIConfig(
-        provider="groq",
-        model=model,
-        api_key=api_key or None,
-    )
-    extractor = AIExtractor(config=config)
-    ok, msg = extractor.check_availability()
-    return extractor, ok, msg
+def _get_key_pool(keys_tuple: tuple[str, ...]) -> GroqKeyPool:
+    """Return a shared GroqKeyPool instance."""
+    pool = GroqKeyPool()
+    if keys_tuple:
+        pool.set_keys(list(keys_tuple))
+    else:
+        pool.reload_from_env()
+    return pool
 
 
 # ---------------------------------------------------------------------------
-# Sidebar: model, connection status, tools
+# Sidebar: Engine, Multi-Key Pool, Concurrency, Settings
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.markdown('<div class="rd-brand">ResumeDrop</div>', unsafe_allow_html=True)
+    st.markdown('<div class="rd-brand">📄 ResumeDrop</div>', unsafe_allow_html=True)
 
-    groq_api_key = os.environ.get("GROQ_API_KEY")
-    available_groq_models = list_groq_models(groq_api_key) or _AVAILABLE_MODELS
+    # 1. Rules-only toggle
+    rules_only = st.checkbox(
+        "Rules-only mode (100% offline)",
+        value=st.session_state.rules_only,
+        help="Extract email, phone, and links using regex only. No AI inference calls.",
+    )
+    st.session_state.rules_only = rules_only
+
+    # 2. Key pool discovery
+    env_keys_str = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY") or ""
+    current_keys_raw = st.session_state.custom_keys_text or env_keys_str
+    parsed_keys = tuple(
+        k.strip() for k in re.split(r"[,;\s\n]+", current_keys_raw) if k.strip().startswith("gsk_")
+    )
+    pool = _get_key_pool(parsed_keys)
+
+    # Model selector
+    available_groq_models = _AVAILABLE_MODELS
+    if pool.total_count > 0:
+        fetched = list_groq_models(pool.keys[0].key)
+        if fetched:
+            available_groq_models = fetched
+
     selected_model = st.selectbox(
         "Model",
         options=available_groq_models,
         index=0,
-        key="groq_model_selector",
-        help="Groq Cloud. GPT-OSS 120B gives the most accurate resume extraction.",
+        disabled=rules_only,
+        help="Groq Cloud LPU. GPT-OSS 120B provides the most thorough candidate parsing.",
     )
     st.session_state.selected_model = selected_model
 
-    extractor, is_ready, status_msg = _get_groq_extractor(selected_model)
-
-    if is_ready:
+    # Status indicator
+    if rules_only:
         st.markdown(
-            '<div class="rd-status"><span class="rd-dot ok"></span>Groq connected</div>',
+            '<div class="rd-status"><span class="rd-dot warn"></span>Rules-only active</div>',
+            unsafe_allow_html=True,
+        )
+    elif pool.total_count > 0:
+        st.markdown(
+            f'<div class="rd-status"><span class="rd-dot ok"></span>Groq connected ({pool.active_count}/{pool.total_count} keys active)</div>',
             unsafe_allow_html=True,
         )
     else:
         st.markdown(
-            '<div class="rd-status"><span class="rd-dot warn"></span>Groq not connected</div>'
-            '<div class="rd-note">Add <code>GROQ_API_KEY</code> to the <code>.env</code> file '
-            "in the project folder to turn on AI extraction.</div>",
+            '<div class="rd-status"><span class="rd-dot warn"></span>No Groq keys configured</div>',
             unsafe_allow_html=True,
         )
 
+    # Multi-Key Manager Expander
+    with st.expander(f"🔑 Groq Multi-Key Pool ({pool.total_count})", expanded=(pool.total_count == 0)):
+        st.caption("Paste 2–3 Groq API keys (comma or newline-separated) for parallel speed and rate-limit fallback.")
+        keys_input = st.text_area(
+            "API Keys",
+            value=current_keys_raw,
+            placeholder="gsk_key1..., gsk_key2...",
+            height=90,
+            label_visibility="collapsed",
+        )
+        if st.button("Apply & Save Keys", use_container_width=True):
+            _save_keys_to_env(keys_input)
+            st.session_state.custom_keys_text = keys_input
+            _get_key_pool.clear()
+            st.rerun()
+
+    # Parallel concurrency slider
+    max_workers = st.slider(
+        "Parallel Workers",
+        min_value=1,
+        max_value=4,
+        value=st.session_state.max_workers,
+        disabled=rules_only,
+        help="Processes multiple resumes in parallel across your Groq keys.",
+    )
+    st.session_state.max_workers = max_workers
+
     st.divider()
 
-    st.write("")
     if st.button("Reset workspace", key="sidebar_reset_btn", use_container_width=True):
         _reset_workspace()
 
+
 # ---------------------------------------------------------------------------
-# Header
+# Header Section
 # ---------------------------------------------------------------------------
 st.markdown("""
 <h1 class="rd-title">Resume to Excel</h1>
-<p class="rd-lede">Drop PDF or DOCX resumes below. Candidate details are extracted into a formatted Excel workbook you can review and edit first.</p>
+<p class="rd-lede">Drop PDF, DOCX, or TXT resumes below. Candidate details are extracted into a formatted 5-worksheet Excel workbook you can review and edit first.</p>
 """, unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # Upload Section
 # ---------------------------------------------------------------------------
 uploaded_files = st.file_uploader(
     "Upload resumes",
-    type=["pdf", "docx"],
+    type=["pdf", "docx", "txt"],
     accept_multiple_files=True,
     key=f"uploader_{st.session_state.upload_key}",
-    help=f"PDF or DOCX, up to {MAX_FILE_SIZE_MB} MB per file.",
+    help=f"PDF, DOCX, or TXT up to {MAX_FILE_SIZE_MB} MB per file.",
     label_visibility="collapsed",
 )
 
@@ -463,18 +454,19 @@ if uploaded_files:
     st.markdown(chips_html, unsafe_allow_html=True)
 
     if duplicate_names:
-        st.warning(f"Duplicate files detected: {', '.join(duplicate_names)}. Only the first instance will be extracted.")
+        st.warning(f"Duplicate files detected: {', '.join(duplicate_names)}. Content hash deduplication will process duplicates once.")
 
     # Reset results if batch has changed
     if st.session_state.processed:
         prev = set(st.session_state.get("_last_filenames", []))
         curr = set(filenames)
         if prev != curr:
-            st.session_state.candidates  = []
+            st.session_state.candidates = []
             st.session_state.failed_docs = []
-            st.session_state.processed   = False
-            st.session_state.edited      = {}
+            st.session_state.processed = False
+            st.session_state.edited = {}
     st.session_state["_last_filenames"] = filenames
+
 
 # ---------------------------------------------------------------------------
 # Action Bar
@@ -492,91 +484,86 @@ with col_btn2:
     if st.button("Clear all", key="clear_btn", use_container_width=True):
         _reset_workspace()
 
+
 # ---------------------------------------------------------------------------
-# Processing Workflow
+# Processing Workflow (Parallel Multi-Key Engine)
 # ---------------------------------------------------------------------------
 if process_clicked and uploaded_files and not st.session_state.processed:
-    extractor, is_ready, status_msg = _get_groq_extractor(st.session_state.selected_model)
+    ai_extractor = None
+    if not st.session_state.rules_only and pool.total_count > 0:
+        config = AIConfig(
+            model=st.session_state.selected_model,
+            key_pool=pool,
+        )
+        ai_extractor = AIExtractor(config=config)
 
-    # Groq is the sole AI engine
-    parser = ResumeParser(ai_extractor=extractor if is_ready else None)
+    parser = ResumeParser(ai_extractor=ai_extractor)
     reader = DocumentReader()
 
-    candidates: list[CandidateRecord] = []
-    failed_docs: list[dict] = []
+    # Step 1: Read files and detect duplicates via SHA-256
+    doc_results: list[DocumentResult] = []
+    seen_hashes: set[str] = set()
 
-    progress_bar = st.progress(0, text="Starting…")
+    # Deduplicate upload list by filename
+    seen_names = set()
+    unique_uploads = []
+    for uf in uploaded_files:
+        if uf.name not in seen_names:
+            seen_names.add(uf.name)
+            unique_uploads.append(uf)
+
+    progress_bar = st.progress(0, text="Reading documents...")
     status_area = st.empty()
 
-    # Deduplicate uploads by name
-    seen_fn: set[str] = set()
-    unique_files = []
-    for uf in uploaded_files:
-        if uf.name not in seen_fn:
-            seen_fn.add(uf.name)
-            unique_files.append(uf)
+    for uf in unique_uploads:
+        raw_bytes = uf.getvalue()
+        doc = reader.process_bytes(raw_bytes, uf.name, seen_hashes)
+        if doc.file_hash:
+            seen_hashes.add(doc.file_hash)
+        doc_results.append(doc)
 
-    total_files = len(unique_files)
+    # Step 2: Parallel Batch Extraction across Groq Multi-Key Pool
+    progress_bar.progress(20, text=f"Extracting with {st.session_state.max_workers} parallel workers...")
+    logs_holder: list[str] = []
 
-    for i, uf in enumerate(unique_files):
-        pct = int((i / total_files) * 100)
-        progress_bar.progress(pct, text=f"Processing {uf.name} ({i+1}/{total_files})…")
-        try:
-            raw_bytes = uf.getvalue()
-            doc: DocumentResult = reader.process_bytes(raw_bytes, uf.name)
+    def _on_progress(completed: int, total: int, item: CandidateRecord | dict):
+        pct = 20 + int((completed / total) * 75)
+        fn = item.resume_filename if isinstance(item, CandidateRecord) else item.get("filename", "")
+        status_label = item.metadata.processing_status if isinstance(item, CandidateRecord) else item.get("doc_status", "error")
+        progress_bar.progress(pct, text=f"Processed {fn} ({completed}/{total})...")
+        is_ok = isinstance(item, CandidateRecord) and item.metadata.processing_status in ("success", "review_required", "partial")
+        line = f'<div class="rd-progress-line {"ok" if is_ok else "bad"}">{"✓" if is_ok else "✗"} {html.escape(fn)} → {html.escape(str(status_label))}</div>'
+        logs_holder.append(line)
+        status_area.markdown("\n".join(logs_holder[-4:]), unsafe_allow_html=True)
 
-            if doc.status == ProcessingStatus.SUCCESS:
-                candidate = parser.parse(doc)
-                candidate = validate_candidate(candidate)
-                candidates.append(candidate)
-                status_area.markdown(
-                    f'<div class="rd-progress-line ok">✓ {html.escape(uf.name)} → {html.escape(str(candidate.metadata.processing_status))}</div>',
-                    unsafe_allow_html=True,
-                )
-            else:
-                failed_docs.append({
-                    "filename":   uf.name,
-                    "doc_status": doc.status.value,
-                    "error":      doc.error,
-                    "char_count": doc.char_count,
-                })
-                status_area.markdown(
-                    f'<div class="rd-progress-line bad">✗ {html.escape(uf.name)} → {html.escape(str(doc.error))}</div>',
-                    unsafe_allow_html=True,
-                )
-        except Exception as exc:  # noqa: BLE001
-            failed_docs.append({
-                "filename":   uf.name,
-                "doc_status": "error",
-                "error":      str(exc),
-                "char_count": 0,
-            })
-            status_area.markdown(
-                f'<div class="rd-progress-line bad">✗ {html.escape(uf.name)} → Unexpected error: {html.escape(str(exc))}</div>',
-                unsafe_allow_html=True,
-            )
+    candidates, failed_docs = parser.parse_batch_parallel(
+        doc_results,
+        max_workers=st.session_state.max_workers if ai_extractor else 1,
+        callback=_on_progress,
+    )
 
     progress_bar.progress(100, text="Extraction complete")
-    st.session_state.candidates  = candidates
+    st.session_state.candidates = candidates
     st.session_state.failed_docs = failed_docs
-    st.session_state.processed   = True
-    st.session_state.edited      = {}
+    st.session_state.processed = True
+    st.session_state.edited = {}
     status_area.empty()
     st.rerun()
 
+
 # ---------------------------------------------------------------------------
-# Results
+# Results Section
 # ---------------------------------------------------------------------------
 if st.session_state.processed:
-    candidates  = st.session_state.candidates
+    candidates = st.session_state.candidates
     failed_docs = st.session_state.failed_docs
 
     st.subheader("Results")
 
-    total      = len(candidates) + len(failed_docs)
-    succeeded  = sum(1 for c in candidates if c.metadata.processing_status == "success")
-    review     = sum(1 for c in candidates if c.metadata.processing_status in ("review_required", "partial"))
-    failed     = len(failed_docs)
+    total = len(candidates) + len(failed_docs)
+    succeeded = sum(1 for c in candidates if c.metadata.processing_status == "success")
+    review = sum(1 for c in candidates if c.metadata.processing_status in ("review_required", "partial"))
+    failed = len(failed_docs)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total resumes", total)
@@ -584,26 +571,26 @@ if st.session_state.processed:
     c3.metric("Needs review", review)
     c4.metric("Failed", failed)
 
-    # Candidate overview table
+    # Candidate Overview Table
     if candidates:
         st.write("")
         table_rows = []
         for rec in candidates:
-            effective_rec = st.session_state.edited.get(rec.resume_filename, rec)
+            effective = st.session_state.edited.get(rec.resume_filename, rec)
             edu_str = "; ".join(
                 " · ".join(filter(None, [e.qualification, e.institution, e.graduation_year]))
-                for e in effective_rec.education
+                for e in effective.education
             )
-            status = effective_rec.metadata.processing_status
+            status = effective.metadata.processing_status
             cfg = _STATUS_CONFIG.get(status, {"label": status})
             table_rows.append({
-                "Filename":  effective_rec.resume_filename,
-                "Candidate Name": effective_rec.full_name or "—",
-                "Email":     effective_rec.email or "—",
-                "Phone":     effective_rec.phone or "—",
+                "Filename": effective.resume_filename,
+                "Candidate Name": effective.full_name or "—",
+                "Email": effective.email or "—",
+                "Phone": effective.phone or "—",
                 "Education": edu_str or "—",
-                "Top Skills": ", ".join(effective_rec.technical_skills[:5]) or "—",
-                "Status":    cfg["label"],
+                "Top Skills": ", ".join(effective.technical_skills[:5]) or "—",
+                "Status": cfg["label"],
             })
         st.dataframe(table_rows, use_container_width=True, hide_index=True)
 
@@ -611,33 +598,33 @@ if st.session_state.processed:
     if failed_docs:
         with st.expander(f"Failed documents ({len(failed_docs)})", expanded=False):
             for fd in failed_docs:
-                st.markdown(f"- **{fd['filename']}** — `{fd['doc_status']}`: {fd.get('error', 'Unspecified error')}")
+                st.markdown(f"- **{fd['filename']}** — `{fd.get('doc_status', 'error')}`: {fd.get('error', 'Unspecified error')}")
 
-    # Inline editor for review
+    # Inline Editor for Review
     if candidates:
         st.subheader("Review and edit")
-        st.caption("Changes you save here are included in the exported workbook.")
+        st.caption("Changes you save here are automatically re-validated and included in the exported workbook.")
 
         for orig_rec in candidates:
             filename = orig_rec.resume_filename
             rec = st.session_state.edited.get(filename, orig_rec)
             status = rec.metadata.processing_status
-            cfg = _STATUS_CONFIG.get(status, {"label": status, "dot": "grey"})
+            cfg = _STATUS_CONFIG.get(status, {"label": status})
 
             with st.expander(f"{rec.full_name or filename}  ·  {cfg['label']}", expanded=(status == "review_required")):
                 if rec.metadata.validation_issues:
-                    st.warning("**Validation Notes:**\n" + "\n".join(f"- {issue}" for issue in rec.metadata.validation_issues))
+                    st.warning("**Validation Notes:**\n" + "\n".join(f"- {i}" for i in rec.metadata.validation_issues))
                 if rec.metadata.missing_fields:
                     st.info("**Missing Recommended Fields:** " + ", ".join(rec.metadata.missing_fields))
 
                 with st.form(key=f"edit_form_{filename}"):
                     col1, col2 = st.columns(2)
-                    new_name  = col1.text_input("Full Name", value=rec.full_name or "", key=f"fn_{filename}")
+                    new_name = col1.text_input("Full Name", value=rec.full_name or "", key=f"fn_{filename}")
                     new_email = col2.text_input("Email", value=rec.email or "", key=f"em_{filename}")
 
                     col3, col4 = st.columns(2)
                     new_phone = col3.text_input("Phone Number", value=rec.phone or "", key=f"ph_{filename}")
-                    new_loc   = col4.text_input("Location", value=rec.location or "", key=f"lc_{filename}")
+                    new_loc = col4.text_input("Location", value=rec.location or "", key=f"lc_{filename}")
 
                     edu_text = st.text_area(
                         "Education (Qualification | Specialization | Institution | Graduation Year)",
@@ -651,8 +638,8 @@ if st.session_state.processed:
 
                     col5, col6, col7 = st.columns(3)
                     new_skills = col5.text_area("Technical Skills", value=", ".join(rec.technical_skills), height=70, key=f"sk_{filename}")
-                    new_langs  = col6.text_area("Languages", value=", ".join(rec.programming_languages), height=70, key=f"lg_{filename}")
-                    new_tools  = col7.text_area("Tools & Libraries", value=", ".join(rec.tools), height=70, key=f"tl_{filename}")
+                    new_langs = col6.text_area("Languages", value=", ".join(rec.programming_languages), height=70, key=f"lg_{filename}")
+                    new_tools = col7.text_area("Tools & Libraries", value=", ".join(rec.tools), height=70, key=f"tl_{filename}")
 
                     exp_text = st.text_area(
                         "Work Experience (Employer | Job Title | Start Date | End Date)",
@@ -684,7 +671,6 @@ if st.session_state.processed:
                     save_submitted = st.form_submit_button("Save changes", use_container_width=True)
 
                 if save_submitted:
-                    # Parse education entries
                     new_edu: list[EducationRecord] = []
                     for line in edu_text.strip().splitlines():
                         parts = [p.strip() for p in line.split("|")]
@@ -696,7 +682,6 @@ if st.session_state.processed:
                                 graduation_year=parts[3] if len(parts) > 3 and parts[3] else None,
                             ))
 
-                    # Parse work experience entries
                     new_exp: list[WorkExperience] = []
                     for line in exp_text.strip().splitlines():
                         parts = [p.strip() for p in line.split("|")]
@@ -708,12 +693,11 @@ if st.session_state.processed:
                                 end_date=parts[3] if len(parts) > 3 and parts[3] else None,
                             ))
 
-                    # Parse project entries
                     new_proj: list[Project] = []
                     for line in proj_text.strip().splitlines():
                         parts = [p.strip() for p in line.split("|")]
                         if any(parts):
-                            techs = [t.strip() for t in parts[2].split(",")] if len(parts) > 2 and parts[2] else []
+                            techs = [t.strip() for t in parts[2].split(",") if t.strip()] if len(parts) > 2 else []
                             new_proj.append(Project(
                                 name=parts[0] if len(parts) > 0 and parts[0] else None,
                                 description=parts[1] if len(parts) > 1 and parts[1] else None,
@@ -744,6 +728,7 @@ if st.session_state.processed:
                             processing_status=rec.metadata.processing_status,
                             extraction_method=rec.metadata.extraction_method,
                             model_used=rec.metadata.model_used,
+                            key_index_used=rec.metadata.key_index_used,
                             extracted_at=rec.metadata.extracted_at,
                         ),
                         raw_text_snippet=rec.raw_text_snippet,
@@ -754,7 +739,7 @@ if st.session_state.processed:
                     st.rerun()
 
     # -----------------------------------------------------------------------
-    # Export
+    # Export Section
     # -----------------------------------------------------------------------
     final_records = [
         st.session_state.edited.get(rec.resume_filename, rec)
@@ -768,14 +753,26 @@ if st.session_state.processed:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             dl_filename = f"candidates_{timestamp}.xlsx"
 
-            st.download_button(
-                label=f"Download Excel workbook ({len(final_records)} candidates)",
-                data=excel_bytes,
-                file_name=dl_filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="download_btn",
-                type="primary",
-                use_container_width=True,
-            )
+            col_dl1, col_dl2, _ = st.columns([2, 1, 3])
+            with col_dl1:
+                st.download_button(
+                    label=f"⬇ Download Excel workbook ({len(final_records)} candidates)",
+                    data=excel_bytes,
+                    file_name=dl_filename,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_btn",
+                    type="primary",
+                    use_container_width=True,
+                )
+            with col_dl2:
+                json_bytes = json.dumps([r.model_dump() for r in final_records], indent=2).encode("utf-8")
+                st.download_button(
+                    label="⬇ Download JSON",
+                    data=json_bytes,
+                    file_name=f"candidates_{timestamp}.json",
+                    mime="application/json",
+                    key="download_json_btn",
+                    use_container_width=True,
+                )
         except Exception as exc:
             st.error(f"Error creating Excel workbook: {exc}")

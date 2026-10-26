@@ -1,14 +1,11 @@
 """
 schemas/candidate.py
 ====================
-Canonical Pydantic data model for a single candidate record.
+Canonical Pydantic v2 data models for candidate records.
 
 Every successfully processed resume produces exactly one CandidateRecord.
-Missing scalar values are represented as None; missing collections as [].
-Nothing is ever invented to fill required fields.
-
-Phase 2 populates this schema.
-Phase 3 will serialise it to Excel.
+Missing scalar values remain None; missing collections remain [].
+Nothing is ever fabricated to fill required fields.
 """
 
 from __future__ import annotations
@@ -29,10 +26,10 @@ class EducationRecord(BaseModel):
     """A single qualification / degree."""
 
     qualification: Optional[str] = None
-    """E.g. 'B.Sc. Computer Science', 'M.Tech', 'Ph.D.'"""
+    """E.g. 'B.Tech', 'M.Sc.', 'Ph.D.'"""
 
     specialization: Optional[str] = None
-    """E.g. 'Machine Learning', 'Information Systems'"""
+    """E.g. 'Computer Science', 'Data Analytics'"""
 
     institution: Optional[str] = None
     """College or university name."""
@@ -58,7 +55,6 @@ class WorkExperience(BaseModel):
     employer: Optional[str] = None
     job_title: Optional[str] = None
     start_date: Optional[str] = None
-    """Free-form date string, e.g. 'Jan 2021', '2020-06', 'Present'."""
     end_date: Optional[str] = None
     summary: Optional[str] = None
     """AI-written one-line summary of role and impact."""
@@ -97,7 +93,10 @@ class ExtractionMetadata(BaseModel):
     """How the record was built: 'rules_only' | 'ai' | 'rules+ai' | 'none'"""
 
     model_used: Optional[str] = None
-    """The Ollama model tag that was used, e.g. 'qwen3:4b'."""
+    """The Groq model tag that was used, e.g. 'openai/gpt-oss-120b'."""
+
+    key_index_used: Optional[int] = None
+    """Index of the Groq API key from the multi-key pool that handled this record."""
 
     extracted_at: Optional[str] = None
     """ISO-8601 timestamp of extraction."""
@@ -109,12 +108,7 @@ class ExtractionMetadata(BaseModel):
 
 
 class CandidateRecord(BaseModel):
-    """The canonical output record for a single resume.
-
-    Every resume that Phase 1 successfully reads should produce exactly one
-    CandidateRecord.  Missing values remain None / [] — they are never
-    invented.
-    """
+    """The canonical output record for a single resume."""
 
     # ---- Identification --------------------------------------------------
     candidate_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -144,12 +138,11 @@ class CandidateRecord(BaseModel):
     github_url: Optional[str] = None
     portfolio_url: Optional[str] = None
 
-    # ---- Metadata (never exported to Excel candidate columns) ------------
+    # ---- Metadata --------------------------------------------------------
     metadata: ExtractionMetadata = Field(default_factory=ExtractionMetadata)
 
-    # ---- Source text (for debugging, not exported) -----------------------
+    # ---- Source text (for inspection, not exported to candidate cells) ---
     raw_text_snippet: Optional[str] = None
-    """First 500 chars of the extracted text — useful for debugging."""
 
     @field_validator("email", mode="before")
     @classmethod
@@ -161,7 +154,6 @@ class CandidateRecord(BaseModel):
     @field_validator("phone", mode="before")
     @classmethod
     def coerce_phone(cls, v: object) -> Optional[str]:
-        """Keep phone as a string; strip surrounding whitespace."""
         if v is None or v == "":
             return None
         return str(v).strip()
@@ -172,7 +164,6 @@ class CandidateRecord(BaseModel):
     )
     @classmethod
     def ensure_list(cls, v: object) -> list:
-        """Tolerate None and single strings from model output."""
         if v is None:
             return []
         if isinstance(v, str):
@@ -185,62 +176,19 @@ class CandidateRecord(BaseModel):
             self.metadata.extracted_at = datetime.now(timezone.utc).isoformat()
         return self
 
-    # ---- Convenience helpers ---------------------------------------------
-
     def mark_missing(self, field_name: str) -> None:
-        """Record that a field could not be extracted."""
         if field_name not in self.metadata.missing_fields:
             self.metadata.missing_fields.append(field_name)
 
     def add_issue(self, issue: str) -> None:
-        """Record a validation issue."""
         self.metadata.validation_issues.append(issue)
 
     def add_review_note(self, note: str) -> None:
-        """Flag something for manual review."""
         self.metadata.review_notes.append(note)
 
     @property
     def is_complete(self) -> bool:
-        """True when no missing fields and no validation issues."""
         return (
             not self.metadata.missing_fields
             and not self.metadata.validation_issues
         )
-
-    def to_flat_dict(self) -> dict:
-        """Return a flat dictionary suitable for a single Excel row.
-
-        Collections (education, experience, projects) are joined as
-        semicolon-separated strings.  Used by Phase 3 Excel export.
-        """
-        edu_str = "; ".join(
-            " ".join(filter(None, [e.qualification, e.specialization, e.institution, e.graduation_year]))
-            for e in self.education
-        )
-        exp_str = "; ".join(
-            " ".join(filter(None, [e.job_title, e.employer, e.start_date, e.end_date]))
-            for e in self.work_experience
-        )
-        proj_str = "; ".join(p.name or "" for p in self.projects if p.name)
-        skills_str = ", ".join(self.technical_skills + self.programming_languages + self.tools)
-
-        return {
-            "candidate_id": self.candidate_id,
-            "resume_filename": self.resume_filename,
-            "full_name": self.full_name or "",
-            "email": self.email or "",
-            "phone": self.phone or "",
-            "location": self.location or "",
-            "education": edu_str,
-            "skills": skills_str,
-            "work_experience": exp_str,
-            "projects": proj_str,
-            "certifications": "; ".join(self.certifications),
-            "linkedin_url": self.linkedin_url or "",
-            "github_url": self.github_url or "",
-            "portfolio_url": self.portfolio_url or "",
-            "processing_status": self.metadata.processing_status,
-            "missing_fields": ", ".join(self.metadata.missing_fields),
-            "review_notes": "; ".join(self.metadata.review_notes),
-        }

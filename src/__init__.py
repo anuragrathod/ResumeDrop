@@ -1,0 +1,1 @@
+"""ResumeDrop core source package."""

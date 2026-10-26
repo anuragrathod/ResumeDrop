@@ -1,20 +1,14 @@
 """
 src/validator.py
 ================
-Phase 2: Post-extraction validation and normalisation.
+Phase 2: Post-extraction validation, normalisation, and formula sanitisation.
 
-This module receives a CandidateRecord that has already been populated by
-the parser and runs a second pass of checks:
-
-- Email format validation.
-- Phone number plausibility.
-- Graduation-year plausibility.
-- Duplicate education / experience detection.
-- Spreadsheet formula injection sanitisation (Phase 3 safety).
-
-It NEVER modifies the candidate's actual data — it only appends issues and
-review notes to metadata.  Normalisation is limited to safe transformations
-(lowercase email, strip whitespace) that do not change meaning.
+Checks:
+- Email syntax validation.
+- Phone number plausibility (7 to 15 digits).
+- Graduation-year plausibility (1950 to 2035).
+- Duplicate education and work experience detection.
+- Spreadsheet formula injection protection (prefixing with ' for Excel safety).
 """
 
 from __future__ import annotations
@@ -24,40 +18,28 @@ from typing import Optional
 
 from schemas.candidate import CandidateRecord
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-# A reasonable range for graduation years
 _MIN_GRAD_YEAR = 1950
 _MAX_GRAD_YEAR = 2035
 
-# Characters that turn a cell into a spreadsheet formula
+# Characters that trigger spreadsheet formula execution in Excel / Calc
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
-# Strict email pattern for validation (different from extraction — this one
-# rejects clearly malformed addresses that somehow slipped through).
 _VALID_EMAIL_RE = re.compile(
     r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$"
 )
 
 
-# ---------------------------------------------------------------------------
-# Individual validators
-# ---------------------------------------------------------------------------
-
-
 def validate_email(email: Optional[str]) -> Optional[str]:
-    """Return an issue string if *email* is malformed, else None."""
+    """Return an issue string if email is malformed, else None."""
     if email is None:
         return None
-    if not _VALID_EMAIL_RE.match(email):
+    if not _VALID_EMAIL_RE.match(email.strip()):
         return f"Email '{email}' does not appear to be valid."
     return None
 
 
 def validate_phone(phone: Optional[str]) -> Optional[str]:
-    """Return an issue string if *phone* has an implausible digit count."""
+    """Return an issue string if phone has an implausible digit count."""
     if phone is None:
         return None
     digits = re.sub(r"\D", "", phone)
@@ -69,14 +51,13 @@ def validate_phone(phone: Optional[str]) -> Optional[str]:
 
 
 def validate_graduation_years(record: CandidateRecord) -> list[str]:
-    """Return a list of issue strings for implausible graduation years."""
+    """Return issue strings for implausible graduation or start years."""
     issues = []
     for edu in record.education:
         for attr in ("graduation_year", "start_year"):
-            raw = getattr(edu, attr)
+            raw = getattr(edu, attr, None)
             if raw is None:
                 continue
-            # Extract 4-digit year if present
             year_match = re.search(r"\b(19|20)\d{2}\b", str(raw))
             if year_match:
                 year = int(year_match.group())
@@ -89,87 +70,78 @@ def validate_graduation_years(record: CandidateRecord) -> list[str]:
 
 
 def sanitise_formula_injection(value: Optional[str]) -> Optional[str]:
-    """Prefix a cell value with a single quote if it starts with a formula char.
-
-    This is a defensive measure for Phase 3 Excel export.  The original
-    CandidateRecord is NOT modified — this function is called by the Excel
-    exporter at write time.
-    """
+    """Prefix a string with a single quote if it starts with a formula character."""
     if value is None:
         return None
-    if any(value.startswith(prefix) for prefix in _FORMULA_PREFIXES):
-        return "'" + value
-    return value
+    str_val = str(value)
+    if any(str_val.startswith(prefix) for prefix in _FORMULA_PREFIXES):
+        return "'" + str_val
+    return str_val
 
 
 def _find_duplicates(items: list, key_fn) -> list[str]:
-    """Return a list of duplicate key strings found in *items*."""
+    """Return a list of duplicate keys found in items."""
     seen: set = set()
     dupes: list[str] = []
     for item in items:
         k = key_fn(item)
-        if k and k in seen:
+        if k and k.lower() in seen:
             dupes.append(str(k))
         elif k:
-            seen.add(k)
+            seen.add(k.lower())
     return dupes
 
 
-# ---------------------------------------------------------------------------
-# Main validation function
-# ---------------------------------------------------------------------------
-
-
 def validate_candidate(record: CandidateRecord) -> CandidateRecord:
-    """Run all post-extraction validation passes on *record* in place.
+    """Run all post-extraction validation passes on record in place."""
+    record.metadata.validation_issues = []
+    record.metadata.review_notes = []
 
-    All findings are appended to ``record.metadata.validation_issues`` or
-    ``record.metadata.review_notes``.  The candidate data fields themselves
-    are not modified (except safe normalisations explicitly documented below).
-
-    Safe normalisations applied:
-    - Email is already lowercased by the Pydantic validator.
-    - Leading/trailing whitespace on strings is stripped.
-
-    Args:
-        record: A :class:`~schemas.candidate.CandidateRecord` populated by
-                the parser.
-
-    Returns:
-        The same *record* instance, with metadata updated.
-    """
-    # ---- Email -----------------------------------------------------------
+    # Email
     email_issue = validate_email(record.email)
     if email_issue:
         record.add_issue(email_issue)
 
-    # ---- Phone -----------------------------------------------------------
+    # Phone
     phone_issue = validate_phone(record.phone)
     if phone_issue:
         record.add_issue(phone_issue)
 
-    # ---- Graduation years ------------------------------------------------
+    # Graduation years
     for issue in validate_graduation_years(record):
         record.add_issue(issue)
 
-    # ---- Duplicate education records ------------------------------------
+    # Duplicate education
     edu_dupes = _find_duplicates(
         record.education,
-        lambda e: (e.institution or "") + (e.qualification or ""),
+        lambda e: (e.institution or "") + "_" + (e.qualification or ""),
     )
     for dupe in edu_dupes:
         record.add_review_note(f"Duplicate education entry detected: '{dupe}'")
 
-    # ---- Duplicate work experience records ------------------------------
+    # Duplicate work experience
     exp_dupes = _find_duplicates(
         record.work_experience,
-        lambda e: (e.employer or "") + (e.job_title or ""),
+        lambda e: (e.employer or "") + "_" + (e.job_title or ""),
     )
     for dupe in exp_dupes:
         record.add_review_note(f"Duplicate work experience entry detected: '{dupe}'")
 
-    # ---- Set final processing status ------------------------------------
-    if record.metadata.validation_issues and record.metadata.processing_status == "success":
+    # Missing recommended fields
+    record.metadata.missing_fields = []
+    if not record.full_name:
+        record.mark_missing("full_name")
+    if not record.email:
+        record.mark_missing("email")
+    if not record.phone:
+        record.mark_missing("phone")
+    if not record.education:
+        record.mark_missing("education")
+    if not (record.technical_skills or record.programming_languages or record.tools):
+        record.mark_missing("technical_skills")
+
+    # Status update
+    if record.metadata.validation_issues:
         record.metadata.processing_status = "review_required"
 
     return record

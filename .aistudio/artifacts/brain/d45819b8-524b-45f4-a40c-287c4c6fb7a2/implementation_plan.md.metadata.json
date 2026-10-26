@@ -1,0 +1,6 @@
+{
+  "summary":  "Architectural blueprint and systematic execution plan for restoring, repairing, modernizing, and auditing the Python ResumeDrop application. Focuses on Python-native document parsing, multi-key Groq rate-limit rotation with parallel batch processing, Streamlit UI/UX modernization, comprehensive Windows/Linux setup guides, and project audit reporting.",
+  "updatedAt":  "2026-10-26T05:08:51.433379635Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

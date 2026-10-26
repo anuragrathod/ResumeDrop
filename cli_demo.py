@@ -1,138 +1,109 @@
 """
 cli_demo.py
 ===========
-Phase 1 CLI demonstration — preserved from the original app.py.
+Command-line text extraction and resume parsing tool for ResumeDrop.
 
-Processes PDF and DOCX resumes from a directory and prints a
-formatted per-file status report.  Useful for quick smoke-testing
-without starting the Streamlit server.
+Features:
+- Fast document text extraction (PyMuPDF for PDF, python-docx for DOCX, MarkItDown/utf-8 for TXT)
+- Candidate structured extraction (Rule-based or AI-assisted via Groq pool)
+- 5-sheet styled Excel workbook export (Candidates, Education, Work Experience, Projects, Log)
 
-Usage (from the project root with the virtual environment active):
+Usage:
+    # Text extraction preview
+    python cli_demo.py sample_resumes/alice_chen_resume.pdf --verbose
 
-    python cli_demo.py
-    python cli_demo.py --dir path/to/folder
-    python cli_demo.py file1.pdf file2.docx
-    python cli_demo.py --verbose
+    # Process all resumes in sample_resumes/
+    python cli_demo.py --dir sample_resumes/
+
+    # Full structured extraction and export to Excel:
+    python cli_demo.py --dir sample_resumes/ --extract --export output/candidates.xlsx --verbose
 """
 
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 
+# Add project root to sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from src.document_reader import DocumentReader, ProcessingStatus
-
-logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
-
-_COLOURS_ENABLED = sys.stdout.isatty()
+from src.resume_parser import ResumeParser
+from src.excel_exporter import export_to_file
 
 
-def _colour(code: str, text: str) -> str:
-    if not _COLOURS_ENABLED:
-        return text
-    return f"\033[{code}m{text}\033[0m"
-
-
-GREEN  = lambda t: _colour("32", t)   # noqa: E731
-YELLOW = lambda t: _colour("33", t)   # noqa: E731
-RED    = lambda t: _colour("31", t)   # noqa: E731
-CYAN   = lambda t: _colour("36", t)   # noqa: E731
-BOLD   = lambda t: _colour("1",  t)   # noqa: E731
-
-_STATUS_ICONS = {
-    ProcessingStatus.SUCCESS:           "✅",
-    ProcessingStatus.EMPTY:             "⚠️ ",
-    ProcessingStatus.EMPTY_FILE:        "⚠️ ",
-    ProcessingStatus.UNSUPPORTED_FORMAT:"❌",
-    ProcessingStatus.FILE_TOO_LARGE:    "❌",
-    ProcessingStatus.DUPLICATE:         "🔁",
-    ProcessingStatus.CORRUPT:           "💥",
-    ProcessingStatus.PASSWORD_PROTECTED:"🔒",
-    ProcessingStatus.ERROR:             "❌",
-}
-
-
-def collect_files(sources: list[str]) -> list[Path]:
-    collected: list[Path] = []
-    for src in sources:
-        p = Path(src)
-        if p.is_dir():
-            for ext in ("*.pdf", "*.PDF", "*.docx", "*.DOCX"):
-                collected.extend(sorted(p.glob(ext)))
-        elif p.is_file():
-            collected.append(p)
-        else:
-            print(YELLOW(f"  Warning: '{src}' does not exist — skipped."))
-    return collected
-
-
-def print_result(result) -> None:
-    icon   = _STATUS_ICONS.get(result.status, "?")
-    status = result.status.value.upper().replace("_", " ")
-    colour = GREEN if result.status == ProcessingStatus.SUCCESS else (
-        YELLOW if result.status in (ProcessingStatus.DUPLICATE, ProcessingStatus.EMPTY, ProcessingStatus.EMPTY_FILE)
-        else RED
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="ResumeDrop CLI: High-Speed Resume Extraction & Excel Export",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    print(f"\n  {icon}  {BOLD(result.filename)}")
-    print(f"      Status   : {colour(status)}")
-    print(f"      Chars    : {result.char_count:,}")
-    if result.file_hash:
-        print(f"      SHA-256  : {result.file_hash[:16]}…")
-    if result.error:
-        print(f"      Error    : {result.error}")
-    if result.text:
-        preview = result.text[:300].replace("\n", "↵ ")
-        if len(result.text) > 300:
-            preview += " …"
-        print(f"      Preview  : {CYAN(preview)}")
+    parser.add_argument("files", nargs="*", help="Paths to PDF, DOCX, or TXT files")
+    parser.add_argument("--dir", type=str, default="sample_resumes", help="Directory containing resumes (default: sample_resumes)")
+    parser.add_argument("--extract", "-e", action="store_true", help="Perform structured entity extraction into CandidateRecord")
+    parser.add_argument("--export", type=str, default=None, help="Export candidates to multi-sheet Excel file (.xlsx)")
+    parser.add_argument("--use-ai", action="store_true", help="Enable Groq AI extractor (uses GROQ_API_KEYS pool)")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Print detailed extracted fields / text preview")
+    args = parser.parse_args()
 
+    target_files: list[Path] = []
+    if args.files:
+        target_files = [Path(f) for f in args.files]
+    else:
+        d = Path(args.dir)
+        if d.exists() and d.is_dir():
+            target_files = sorted([
+                p for p in d.iterdir()
+                if p.is_file() and p.suffix.lower() in (".pdf", ".docx", ".txt")
+            ])
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Phase 1 CLI: Extract text from PDF/DOCX resumes.")
-    parser.add_argument("sources", nargs="*", help="Files or directories to process.")
-    parser.add_argument("--dir", metavar="DIR", help="Process all PDF/DOCX in this directory.")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Enable DEBUG logging.")
-    args = parser.parse_args(argv)
+    if not target_files:
+        print(f"[!] No resume files found in '{args.dir}'. Pass files directly or add files to the directory.")
+        return 1
 
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    print(f"[*] Reading {len(target_files)} document(s)...")
+    reader = DocumentReader()
+    results = reader.process_files(target_files)
 
-    sources = list(args.sources)
-    if args.dir:
-        sources.append(args.dir)
-    if not sources:
-        sources = ["sample_resumes"]
+    candidates = []
+    success_count = 0
+    ai_ext = None
+    if args.use_ai:
+        from src.ai_extractor import AIExtractor
+        ai_ext = AIExtractor()
+    resume_parser = ResumeParser(ai_extractor=ai_ext) if (args.extract or args.export) else None
 
-    files = collect_files(sources)
+    for res in results:
+        status_icon = "✓" if res.status == ProcessingStatus.SUCCESS else "✗"
+        print(f"  {status_icon} {res.filename:<32} [{res.status.value:<14}] ({res.char_count:>6,} chars)")
 
-    print(BOLD("\n" + "=" * 60))
-    print(BOLD("  Resume-to-Excel  ·  Phase 1 CLI Demo"))
-    print(BOLD("=" * 60))
+        if res.status == ProcessingStatus.SUCCESS:
+            success_count += 1
+            if resume_parser:
+                cand = resume_parser.parse(res)
+                candidates.append(cand)
+                if args.verbose:
+                    print(f"      Candidate : {cand.full_name or 'N/A'}")
+                    print(f"      Email     : {cand.email or 'N/A'} | Phone: {cand.phone or 'N/A'}")
+                    print(f"      Location  : {cand.location or 'N/A'}")
+                    all_skills = cand.technical_skills + cand.programming_languages
+                    print(f"      Top Skills: {', '.join(all_skills[:6]) if all_skills else 'None'}")
+                    print(f"      Status    : {cand.metadata.processing_status}")
+                    if cand.metadata.validation_issues:
+                        print(f"      Issues    : {'; '.join(cand.metadata.validation_issues[:2])}")
+            elif args.verbose:
+                preview = res.text[:220].replace("\n", " ").strip()
+                print(f"      Preview   : {preview}...\n")
+        else:
+            print(f"      Error     : {res.error}\n")
 
-    if not files:
-        print(YELLOW("\n  No PDF or DOCX files found."))
-        print("  Generate synthetic test files with:\n    python tests/create_test_files.py\n")
-        return 0
+    print(f"\n[=] Extraction Summary: {success_count}/{len(results)} documents processed successfully.")
 
-    print(f"\n  Files found : {len(files)}\n  Processing  …")
+    if args.export and candidates:
+        export_path = export_to_file(candidates, args.export)
+        print(f"[+] Successfully exported {len(candidates)} candidate(s) to 5-sheet workbook: {export_path}")
 
-    reader  = DocumentReader()
-    results = reader.process_files(files)
-
-    print(BOLD("\n" + "-" * 60 + "\n  Per-file Results\n" + "-" * 60))
-    for r in results:
-        print_result(r)
-
-    success = sum(1 for r in results if r.status == ProcessingStatus.SUCCESS)
-    failed  = len(results) - success
-    print(BOLD("\n" + "=" * 60 + "\n  Batch Summary\n" + "=" * 60))
-    print(f"  Total files : {len(results)}")
-    print(f"  {GREEN('Succeeded')}  : {success}")
-    print(f"  {RED('Failed')}     : {failed}\n")
-
-    return 0 if failed == 0 else 1
+    return 0 if success_count > 0 else 1
 
 
 if __name__ == "__main__":

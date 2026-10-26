@@ -1,303 +1,210 @@
-# 🚀 ResumeDrop — Setup Guide
+# ResumeDrop — Setup & Installation Guide
 
-> **AI-powered Resume to Excel automation system**
-> Works on **Windows 10/11** and **Linux (Ubuntu/Debian/Fedora)**
-
----
-
-## 📋 Prerequisites
-
-| Requirement       | Version         | Download Link                                      |
-| ----------------- | --------------- | -------------------------------------------------- |
-| **Python**        | 3.11 or 3.12    | [python.org/downloads](https://www.python.org/downloads/) |
-| **Git**           | Any recent      | [git-scm.com](https://git-scm.com/downloads)       |
-| **Groq API Key**  | Free tier works | [console.groq.com](https://console.groq.com/keys)  |
-| **Ollama** *(optional)* | Latest    | [ollama.com/download](https://ollama.com/download)  |
+This document provides verified, step-by-step installation, configuration, execution, and troubleshooting instructions for both **Windows (PowerShell)** and **Linux (Bash)** environments.
 
 ---
 
-## ⚡ Quick Setup (TL;DR)
+## System Requirements & Prerequisites
 
-```bash
-git clone https://github.com/anuragrathod/ResumeDrop.git
-cd ResumeDrop
-pip install -r requirements.txt
-cp .env.example .env        # Then add your GROQ_API_KEY
-streamlit run app.py
+| Requirement | Specification |
+|---|---|
+| **Python Version** | Python 3.10, 3.11, or 3.12 (64-bit recommended) |
+| **Operating System** | Windows 10/11 (PowerShell 5.1+ / PowerShell 7+) or Linux (Ubuntu 20.04+, Debian 11+, RHEL/Fedora) |
+| **Disk Space** | ~250 MB for dependencies (lightweight; no PyTorch/Docling bloat) |
+| **API Keys** | 1 to 3 Groq API keys (free tier available at [console.groq.com](https://console.groq.com/keys)) |
+
+---
+
+## 🪟 Windows Setup (PowerShell)
+
+### Step 1: Verify Python Installation
+Open **Windows PowerShell** (or Windows Terminal) and verify that Python 3.10+ and pip are installed and added to your `PATH`:
+
+```powershell
+python --version
+pip --version
 ```
 
----
+> **Note**: If `python` is not recognized, download the latest 64-bit installer from [python.org](https://www.python.org/downloads/) and ensure **"Add Python to PATH"** is checked during installation.
 
-## 🪟 Windows Setup (Step-by-Step)
-
-### Step 1 — Install Python
-
-1. Download Python **3.11 or 3.12** from [python.org](https://www.python.org/downloads/)
-2. Run the installer
-3. ✅ **Check** "Add Python to PATH" at the bottom of the installer
-4. Click **Install Now**
-5. Verify installation — open **Command Prompt** or **PowerShell**:
-   ```cmd
-   python --version
-   pip --version
-   ```
-
-### Step 2 — Install Git
-
-1. Download Git from [git-scm.com](https://git-scm.com/downloads/win)
-2. Run the installer with default settings
-3. Verify:
-   ```cmd
-   git --version
-   ```
-
-### Step 3 — Clone the Repository
-
-```cmd
-git clone https://github.com/anuragrathod/ResumeDrop.git
-cd ResumeDrop
+### Step 2: Clone or Enter Repository
+```powershell
+cd path\to\ResumeDrop
 ```
 
-### Step 4 — Create a Virtual Environment (Recommended)
-
-```cmd
+### Step 3: Create & Activate Virtual Environment
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 ```
 
-> 💡 You should see `(.venv)` at the beginning of your prompt.
+> **Execution Policy Troubleshooting**: If you see `Execution_Policies` script restriction error, run:
+> ```powershell
+> Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+> .\.venv\Scripts\Activate.ps1
+> ```
 
-### Step 5 — Install Dependencies
-
-```cmd
+### Step 4: Upgrade Pip & Install Dependencies
+```powershell
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-> ⏳ This may take a few minutes. Docling and PyMuPDF are large packages.
-
-### Step 6 — Configure Environment Variables
-
-```cmd
-copy .env.example .env
+### Step 5: Configure Environment Variables
+Copy the `.env.example` file to `.env`:
+```powershell
+Copy-Item .env.example .env
 ```
 
-Open `.env` in Notepad and replace the placeholder with your actual API key:
+Open `.env` in Notepad or your preferred editor:
+```powershell
+notepad .env
+```
 
+Add your Groq API keys (you can provide 1, 2, or 3 keys to enable high-speed round-robin rotation and automatic HTTP 429 rate-limit failover):
 ```env
-GROQ_API_KEY=gsk_your_actual_groq_api_key_here
+# Single key:
+GROQ_API_KEY=gsk_your_key_here
+
+# OR multi-key pool for parallel rotation:
+GROQ_API_KEY_1=gsk_key1_here
+GROQ_API_KEY_2=gsk_key2_here
+GROQ_API_KEY_3=gsk_key3_here
+
+# Default model (recommended: llama-3.3-70b-versatile or llama-3.1-8b-instant):
+DEFAULT_GROQ_MODEL=llama-3.3-70b-versatile
+MAX_WORKERS=4
 ```
 
-**To get a Groq API Key:**
-1. Go to [console.groq.com](https://console.groq.com/)
-2. Sign up / Log in
-3. Navigate to **API Keys** → **Create API Key**
-4. Copy the key (starts with `gsk_`)
+### Step 6: Run the Application
 
-### Step 7 — Run the App
-
-```cmd
+#### Option A: Streamlit Modern Web Application
+```powershell
 streamlit run app.py
 ```
+Open your browser to `http://localhost:8501`.
 
-The app will open automatically in your browser at `http://localhost:8501` 🎉
+#### Option B: Fast CLI Batch Extraction & Excel Export
+```powershell
+# Extract sample resumes and export to 5-worksheet Excel workbook:
+python cli_demo.py --dir sample_resumes --extract --export output/candidates.xlsx --verbose
+
+# Process custom folder of resumes:
+python cli_demo.py --dir C:\path\to\resumes --extract --export output\results.xlsx
+```
+
+### Step 7: Run Automated Tests
+```powershell
+pytest
+```
+To run tests with code coverage:
+```powershell
+pytest --cov=src tests/
+```
+
+### Step 8: Deactivate Virtual Environment
+When finished, deactivate the environment:
+```powershell
+deactivate
+```
 
 ---
 
-## 🐧 Linux Setup (Step-by-Step)
+## 🐧 Linux Setup (Bash)
 
-### Step 1 — Install Python
-
-**Ubuntu / Debian:**
+### Step 1: Install System Prerequisites
+On Debian/Ubuntu-based distributions:
 ```bash
 sudo apt update
-sudo apt install python3.12 python3.12-venv python3-pip git -y
+sudo apt install -y python3 python3-pip python3-venv build-essential
 ```
 
-**Fedora:**
-```bash
-sudo dnf install python3.12 python3-pip git -y
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S python python-pip git
-```
-
-Verify installation:
+Verify Python:
 ```bash
 python3 --version
 pip3 --version
-git --version
 ```
 
-### Step 2 — Clone the Repository
-
+### Step 2: Clone or Enter Repository
 ```bash
-git clone https://github.com/anuragrathod/ResumeDrop.git
-cd ResumeDrop
+cd /path/to/ResumeDrop
 ```
 
-### Step 3 — Create a Virtual Environment (Recommended)
-
+### Step 3: Create & Activate Virtual Environment
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-> 💡 You should see `(.venv)` at the beginning of your prompt.
-
-### Step 4 — Install Dependencies
-
+### Step 4: Upgrade Pip & Install Dependencies
 ```bash
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-> ⏳ This may take a few minutes.
-
-> **Note (Ubuntu/Debian):** If you encounter issues with `python-magic`, install the system library:
-> ```bash
-> sudo apt install libmagic1
-> ```
-
-### Step 5 — Configure Environment Variables
-
+### Step 5: Configure Environment Variables
 ```bash
 cp .env.example .env
-nano .env   # or use any text editor: vim, code, gedit
+nano .env   # or vim .env
 ```
 
-Set your Groq API key:
+Configure your Groq key pool:
 ```env
-GROQ_API_KEY=gsk_your_actual_groq_api_key_here
+GROQ_API_KEY_1=gsk_key1_here
+GROQ_API_KEY_2=gsk_key2_here
+GROQ_API_KEY_3=gsk_key3_here
+DEFAULT_GROQ_MODEL=llama-3.3-70b-versatile
+MAX_WORKERS=4
 ```
 
-### Step 6 — Run the App
+### Step 6: Run the Application
 
+#### Option A: Streamlit Modern Web Application
 ```bash
-streamlit run app.py
+streamlit run app.py --server.port 8501
 ```
+Open `http://localhost:8501` in your browser.
 
-The app will be available at `http://localhost:8501` 🎉
-
----
-
-## 🤖 Optional: Ollama Setup (Offline AI)
-
-ResumeDrop supports **Ollama** as a local/offline AI backend (no API key needed).
-
-### Install Ollama
-
-- **Windows:** Download from [ollama.com/download](https://ollama.com/download)
-- **Linux:**
-  ```bash
-  curl -fsSL https://ollama.com/install.sh | sh
-  ```
-
-### Pull a Model
-
+#### Option B: CLI Batch Tool
 ```bash
-ollama pull qwen3:4b
+# Process sample resumes and generate 5-sheet Excel workbook:
+python3 cli_demo.py --dir sample_resumes --extract --export output/candidates.xlsx --verbose
 ```
 
-### Usage
+### Step 7: Run Unit Tests & Benchmarks
+```bash
+# Run all unit tests
+pytest
 
-In the ResumeDrop app, select **"Ollama (Local)"** as the AI provider in the sidebar. No API key required.
+# Run throughput benchmark
+python3 scripts/benchmark.py
 
----
-
-## 📁 Project Structure
-
+# Run accuracy evaluation against synthetic ground truth
+python3 scripts/evaluate_extraction.py
 ```
-ResumeDrop/
-├── app.py                  # Main Streamlit dashboard
-├── pages/
-│   └── e.py                # Text Extraction Inspector page
-├── src/
-│   ├── ai_extractor.py     # Groq/Ollama AI extraction logic
-│   ├── document_reader.py  # PDF/DOCX text extraction (Docling + fallbacks)
-│   ├── excel_exporter.py   # Excel file generation
-│   ├── resume_parser.py    # Resume field parsing
-│   ├── validator.py        # Data validation
-│   └── utils.py            # Shared utilities
-├── tests/                  # Unit & integration tests
-├── .streamlit/
-│   └── config.toml         # Streamlit theme configuration
-├── .env.example            # Environment variable template
-├── .env                    # Your local config (git-ignored)
-├── requirements.txt        # Python dependencies
-└── SETUP.md                # This file
+
+### Step 8: Deactivation
+```bash
+deactivate
 ```
 
 ---
 
-## 🧪 Running Tests
+## 🛠️ Common Troubleshooting
 
-```bash
-# Run all tests
-pytest tests/ --ignore=tests/test_integration_real_model.py
+### 1. "Invalid API Key" or 401 Unauthorized Error
+- **Symptom**: Console outputs `Error code: 401 - Invalid API Key`.
+- **Solution**: Obtain valid API keys from [console.groq.com/keys](https://console.groq.com/keys). Paste them into `.env` as `GROQ_API_KEY_1`, `GROQ_API_KEY_2`, etc. Even without an API key, ResumeDrop continues operating using rule-based regex extraction (extracting name, email, phone, location, links).
 
-# Run with coverage
-pytest tests/ --ignore=tests/test_integration_real_model.py --cov=src
-```
+### 2. Rate Limit (HTTP 429) Handling
+- **Built-in Resilience**: ResumeDrop automatically detects HTTP 429 rate limit responses, puts the exhausted key on a 60-second cooldown, logs the failover event, and automatically re-routes pending requests to the next active key in the pool.
+- **Recommendation**: Adding 2 or 3 distinct Groq keys provides 2x to 3x higher throughput with uninterrupted processing during large resume batches.
 
----
+### 3. File Formats Supported
+- **PDF**: Handled natively by `PyMuPDF` (`fitz`), preserving layout columns, tables, and multi-page text.
+- **DOCX**: Handled natively by `python-docx` for paragraphs and embedded tables.
+- **TXT**: Handled via UTF-8 / latin-1 decoding with MarkItDown fallback.
+- **Encrypted / Password-Protected PDFs**: Detected gracefully; the system flags them as `password_protected` in the audit log without crashing.
 
-## ❓ Troubleshooting
-
-### `ModuleNotFoundError: No module named 'streamlit'`
-You forgot to activate the virtual environment or install dependencies:
-```bash
-# Linux
-source .venv/bin/activate
-
-# Windows
-.venv\Scripts\activate
-
-# Then
-pip install -r requirements.txt
-```
-
-### `GROQ_API_KEY not found` or `AI extraction failed`
-Make sure your `.env` file exists and contains a valid key:
-```bash
-cat .env   # Linux
-type .env  # Windows
-```
-
-### `python-magic` error on Linux
-Install the system library:
-```bash
-sudo apt install libmagic1   # Ubuntu/Debian
-sudo dnf install file-libs   # Fedora
-```
-
-### `python-magic` error on Windows
-Install the binary:
-```cmd
-pip install python-magic-bin
-```
-
-### Port 8501 already in use
-Kill the existing process or use a different port:
-```bash
-streamlit run app.py --server.port 8502
-```
-
-### Docling installation fails
-Try installing without the optional format extras first:
-```bash
-pip install docling-slim
-```
-
----
-
-## 📝 Notes
-
-- The `.env` file is **git-ignored** — your API key will never be committed
-- The app supports **PDF**, **DOCX**, and **DOC** resume formats
-- Extracted data can be downloaded as **Excel (.xlsx)** files
-- You can process **multiple resumes** in batch mode
-
----
-
-**Made with ❤️ by [Anurag Rathod](https://github.com/anuragrathod)**
+### 4. Excel Formula Injection Protection
+All text fields exported to `.xlsx` are automatically sanitized. If any string starts with `=`, `+`, `-`, `@`, `\t`, or `\r`, an apostrophe prefix (`'`) is prepended to ensure formulas do not execute when opened in Microsoft Excel or LibreOffice Calc.
