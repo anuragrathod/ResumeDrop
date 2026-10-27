@@ -42,6 +42,7 @@ st.markdown("""
     -webkit-font-smoothing: antialiased;
 }
 .stApp { background: var(--bg); color: var(--text); }
+[data-testid="stSidebar"], [data-testid="collapsedControl"], section[data-testid="stSidebar"] { display: none !important; }
 .block-container { max-width: 1080px; padding: 2rem 2rem 4rem !important; }
 .rd-back { color: var(--accent); text-decoration: none; font-size: 0.9rem; font-weight: 500; }
 .rd-back:hover { text-decoration: underline; }

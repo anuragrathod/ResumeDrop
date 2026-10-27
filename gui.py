@@ -66,6 +66,7 @@ class ResumeDropApp:
         # Build styles and UI
         self._setup_styles()
         self._build_ui()
+        self._verify_keys_on_load()
 
         # Start periodic queue polling for thread-safe UI updates
         self.root.after(100, self._process_ui_queue)
@@ -294,6 +295,28 @@ class ResumeDropApp:
         )
         self.btn_export.pack(side=tk.RIGHT)
 
+    def _verify_keys_on_load(self) -> None:
+        """Check whether configured API keys are connected whenever app is loaded."""
+        if not self.key_pool.keys:
+            self.lbl_pool_status.config(
+                text="API Keys: None (Rules-Only Offline)",
+                foreground=self.warning_color,
+            )
+            return
+
+        def _check_bg() -> None:
+            try:
+                from src.ai_extractor import check_groq_available
+                is_connected, msg = check_groq_available(self.key_pool)
+                if is_connected:
+                    self.ui_queue.put(("pool_status", f"API Keys: Connected ({self.key_pool.active_count}/{self.key_pool.total_count} active)", self.success_color))
+                else:
+                    self.ui_queue.put(("pool_status", "API Keys: Offline / Fallback", self.warning_color))
+            except Exception:
+                self.ui_queue.put(("pool_status", "API Keys: Offline (Rule-Based)", self.warning_color))
+
+        threading.Thread(target=_check_bg, daemon=True).start()
+
     # -----------------------------------------------------------------------
     # Queue Management
     # -----------------------------------------------------------------------
@@ -445,6 +468,11 @@ class ResumeDropApp:
 
                 if msg_type == "status":
                     self.lbl_progress_status.config(text=payload)
+
+                elif msg_type == "pool_status":
+                    status_text = payload
+                    status_color = extra[0] if extra else self.success_color
+                    self.lbl_pool_status.config(text=status_text, foreground=status_color)
 
                 elif msg_type == "candidate_done":
                     cand: CandidateRecord = payload

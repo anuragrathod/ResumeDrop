@@ -24,7 +24,7 @@ st.set_page_config(
     page_title="ResumeDrop",
     page_icon="📄",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # Load environment variables
@@ -163,9 +163,12 @@ h3 { font-size: 1.25rem !important; font-weight: 600 !important; padding-top: 1.
 .rd-progress-line.ok { color: var(--ok); }
 .rd-progress-line.bad { color: var(--bad); }
 
-/* Sidebar */
-[data-testid="stSidebar"] { background: var(--sidebar); border-right: 1px solid var(--line); }
-[data-testid="stSidebar"] > div:first-child { padding: 1.25rem 1rem; }
+/* Sidebar completely removed */
+[data-testid="stSidebar"],
+[data-testid="collapsedControl"],
+section[data-testid="stSidebar"] {
+    display: none !important;
+}
 
 /* Metrics */
 [data-testid="stMetric"] {
@@ -324,98 +327,115 @@ def _get_key_pool(keys_tuple: tuple[str, ...]) -> GroqKeyPool:
 # ---------------------------------------------------------------------------
 # Sidebar: Engine, Multi-Key Pool, Concurrency, Settings
 # ---------------------------------------------------------------------------
-with st.sidebar:
-    st.markdown('<div class="rd-brand">📄 ResumeDrop</div>', unsafe_allow_html=True)
+# ---------------------------------------------------------------------------
+# API Key Discovery & Connection Verification on Load (No Sidebar)
+# ---------------------------------------------------------------------------
+env_keys_str = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY") or ""
+current_keys_raw = st.session_state.custom_keys_text or env_keys_str
+parsed_keys = tuple(
+    k.strip() for k in re.split(r"[,;\s\n]+", current_keys_raw) if k.strip().startswith("gsk_")
+)
+pool = _get_key_pool(parsed_keys)
 
-    # 1. Rules-only toggle
-    rules_only = st.checkbox(
-        "Rules-only mode (100% offline)",
-        value=st.session_state.rules_only,
-        help="Extract email, phone, and links using regex only. No AI inference calls.",
+# Verify API keys connectivity whenever app is loaded
+is_api_connected = False
+api_status_message = "No keys configured"
+if pool.total_count > 0:
+    is_api_connected, api_status_message = check_groq_available(pool)
+
+# Model selector list
+available_groq_models = list(_AVAILABLE_MODELS)
+if is_api_connected and pool.total_count > 0:
+    fetched = list_groq_models(pool.keys[0].key)
+    if fetched:
+        available_groq_models = fetched
+
+if st.session_state.selected_model not in available_groq_models:
+    st.session_state.selected_model = available_groq_models[0]
+
+# ---------------------------------------------------------------------------
+# Header Section & Top Action Controls
+# ---------------------------------------------------------------------------
+hdr_col, reset_col = st.columns([4, 1], vertical_alignment="center")
+with hdr_col:
+    st.markdown("""
+    <h1 class="rd-title">Resume to Excel</h1>
+    <p class="rd-lede">Drop PDF, DOCX, or TXT resumes below. Candidate details are extracted into a formatted 5-worksheet Excel workbook you can review and edit first.</p>
+    """, unsafe_allow_html=True)
+
+with reset_col:
+    if st.button("Reset workspace", key="main_reset_btn", use_container_width=True):
+        _reset_workspace()
+
+# ---------------------------------------------------------------------------
+# API Connection Status Strip (Verified On Load)
+# ---------------------------------------------------------------------------
+if st.session_state.rules_only:
+    st.info("Offline Mode: Rules-only regex extraction active (No AI API calls)", icon="ℹ️")
+elif is_api_connected:
+    st.success(
+        f"Groq API Connected: {pool.active_count}/{pool.total_count} keys active (Verified on app load) · Model: {st.session_state.selected_model} · {st.session_state.max_workers} Worker(s)",
+        icon="🟢",
     )
-    st.session_state.rules_only = rules_only
-
-    # 2. Key pool discovery
-    env_keys_str = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY") or ""
-    current_keys_raw = st.session_state.custom_keys_text or env_keys_str
-    parsed_keys = tuple(
-        k.strip() for k in re.split(r"[,;\s\n]+", current_keys_raw) if k.strip().startswith("gsk_")
+elif pool.total_count > 0:
+    st.warning(
+        f"Groq API Connection Issue: {api_status_message} · Running with rule-based fallback",
+        icon="⚠️",
     )
-    pool = _get_key_pool(parsed_keys)
-
-    # Model selector
-    available_groq_models = _AVAILABLE_MODELS
-    if pool.total_count > 0:
-        fetched = list_groq_models(pool.keys[0].key)
-        if fetched:
-            available_groq_models = fetched
-
-    selected_model = st.selectbox(
-        "Model",
-        options=available_groq_models,
-        index=0,
-        disabled=rules_only,
-        help="Groq Cloud LPU. GPT-OSS 120B provides the most thorough candidate parsing.",
+else:
+    st.warning(
+        "No Groq API Keys Configured · Operating in Offline / Rule-Based Mode (Email, Phone, Links, Location)",
+        icon="🟡",
     )
-    st.session_state.selected_model = selected_model
 
-    # Status indicator
-    if rules_only:
-        st.markdown(
-            '<div class="rd-status"><span class="rd-dot warn"></span>Rules-only active</div>',
-            unsafe_allow_html=True,
-        )
-    elif pool.total_count > 0:
-        st.markdown(
-            f'<div class="rd-status"><span class="rd-dot ok"></span>Groq connected ({pool.active_count}/{pool.total_count} keys active)</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            '<div class="rd-status"><span class="rd-dot warn"></span>No Groq keys configured</div>',
-            unsafe_allow_html=True,
-        )
+# ---------------------------------------------------------------------------
+# Collapsible Configuration & Key Manager Expander
+# ---------------------------------------------------------------------------
+with st.expander("⚙️ Engine Configuration & Multi-Key Pool", expanded=(pool.total_count == 0)):
+    cfg_col1, cfg_col2, cfg_col3 = st.columns([2, 1, 1])
 
-    # Multi-Key Manager Expander
-    with st.expander(f"🔑 Groq Multi-Key Pool ({pool.total_count})", expanded=(pool.total_count == 0)):
-        st.caption("Paste 2–3 Groq API keys (comma or newline-separated) for parallel speed and rate-limit fallback.")
+    with cfg_col1:
         keys_input = st.text_area(
-            "API Keys",
+            "Groq API Keys (multi-key pool)",
             value=current_keys_raw,
-            placeholder="gsk_key1..., gsk_key2...",
-            height=90,
-            label_visibility="collapsed",
+            placeholder="gsk_key1..., gsk_key2..., gsk_key3...",
+            height=70,
+            help="Provide 1–3 Groq API keys separated by commas or newlines for parallel acceleration and rate-limit failover.",
         )
-        if st.button("Apply & Save Keys", use_container_width=True):
+        if st.button("Apply & Test Keys", key="apply_keys_btn", use_container_width=True):
             _save_keys_to_env(keys_input)
             st.session_state.custom_keys_text = keys_input
             _get_key_pool.clear()
             st.rerun()
 
-    # Parallel concurrency slider
-    max_workers = st.slider(
-        "Parallel Workers",
-        min_value=1,
-        max_value=4,
-        value=st.session_state.max_workers,
-        disabled=rules_only,
-        help="Processes multiple resumes in parallel across your Groq keys.",
-    )
-    st.session_state.max_workers = max_workers
+    with cfg_col2:
+        model_idx = available_groq_models.index(st.session_state.selected_model) if st.session_state.selected_model in available_groq_models else 0
+        selected_model = st.selectbox(
+            "Model",
+            options=available_groq_models,
+            index=model_idx,
+            disabled=st.session_state.rules_only,
+            help="Groq Cloud LPU inference model.",
+        )
+        st.session_state.selected_model = selected_model
 
-    st.divider()
+        rules_only = st.checkbox(
+            "Rules-only mode (100% offline)",
+            value=st.session_state.rules_only,
+            help="Extract email, phone, and links using regex only. No AI inference calls.",
+        )
+        st.session_state.rules_only = rules_only
 
-    if st.button("Reset workspace", key="sidebar_reset_btn", use_container_width=True):
-        _reset_workspace()
-
-
-# ---------------------------------------------------------------------------
-# Header Section
-# ---------------------------------------------------------------------------
-st.markdown("""
-<h1 class="rd-title">Resume to Excel</h1>
-<p class="rd-lede">Drop PDF, DOCX, or TXT resumes below. Candidate details are extracted into a formatted 5-worksheet Excel workbook you can review and edit first.</p>
-""", unsafe_allow_html=True)
+    with cfg_col3:
+        max_workers = st.slider(
+            "Parallel Workers",
+            min_value=1,
+            max_value=4,
+            value=st.session_state.max_workers,
+            disabled=st.session_state.rules_only,
+            help="Processes multiple resumes in parallel across your Groq keys.",
+        )
+        st.session_state.max_workers = max_workers
 
 
 # ---------------------------------------------------------------------------
