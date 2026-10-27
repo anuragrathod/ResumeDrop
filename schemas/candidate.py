@@ -192,3 +192,18 @@ class CandidateRecord(BaseModel):
             not self.metadata.missing_fields
             and not self.metadata.validation_issues
         )
+
+    @property
+    def highest_degree(self) -> Optional[str]:
+        if not self.education:
+            return None
+        for edu in self.education:
+            if edu.qualification:
+                if edu.specialization:
+                    return f"{edu.qualification} in {edu.specialization}"
+                return edu.qualification
+        return None
+
+    @property
+    def years_of_experience(self) -> int:
+        return len(self.work_experience)

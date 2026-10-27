@@ -1,22 +1,23 @@
-# ResumeDrop — High-Speed AI Resume Extraction & Excel Automation
+# ResumeDrop — AI Resume Extraction & Excel Automation
 
-ResumeDrop is a high-throughput, Python-native automation engine and modern web application that ingests batches of PDF, DOCX, and TXT resumes, extracts structured candidate records using a parallel multi-key Groq LPU pool with rule-based regex fallback, validates the extracted data, and exports a professionally styled 5-worksheet Excel workbook.
+ResumeDrop is a 100% Python-native desktop automation suite that ingests batches of PDF, DOCX, and TXT resumes, extracts structured candidate records using a high-throughput multi-key Groq LPU pool (`llama-3.3-70b-versatile` / `llama-3.1-8b-instant`) with automatic HTTP 429 failover and rule-based regex fallback, validates the extracted data, and exports a professionally formatted 5-worksheet Excel workbook.
 
 ---
 
 ## ⚡ Key Highlights
 
-- **Multi-Key Groq LPU Engine**: Pools 1 to 3+ Groq API keys with round-robin leasing, concurrent thread workers, and automatic HTTP 429 rate-limit failover with cooldown tracking.
-- **Python-Only Document Parsing**: Lightweight, ultra-fast layout-aware extraction via `PyMuPDF` (`fitz`) and `python-docx` without heavy 4 GB+ PyTorch or Docling bloat.
-- **Rule-Based Hybrid Parser**: Regex extraction for emails, international phones (+1, +44, +91, Indian 10-digit mobile, UK formats), LinkedIn, GitHub, and portfolios. Works completely offline even without API keys.
-- **Data Validation & Sanitization**: Validates graduation years (1950–2035), cleans duplicate degrees, formats names, and neutralizes Excel formula injections (`=`, `+`, `-`, `@`, `\t`, `\r` prefixed with `'`).
-- **Apple/Google-Inspired Streamlit UI**: Clean SF Pro typography, zero-pill metric cards, interactive multi-key pool health status, parallel concurrency slider, inline candidate editor, and instant Excel export.
+- **Pure Python Architecture**: Built exclusively with Python (no TypeScript/Node.js). Zero npm dependencies.
+- **Modern Tkinter Desktop GUI (`gui.py`)**: Native cross-platform desktop application featuring multi-file queueing, real-time progress tracking, candidate review and inline editing, API pool health monitoring, and 1-click Excel export.
+- **Multi-Key Groq LPU Pool**: Thread-safe round-robin key manager (`GroqKeyPool`) supporting 1 to 3+ Groq API keys with automatic HTTP 429 rate-limit failover and cooldown tracking.
+- **Python-Only Document Parsing**: Layout-aware text extraction via `PyMuPDF` (`fitz`) and `python-docx` without heavy 4 GB+ PyTorch or Docling bloat (~250 MB total environment).
+- **Rule-Based Hybrid Fallback**: Regex extraction for emails, international phones (+1, +44, +91, Indian 10-digit mobile, UK formats), LinkedIn, GitHub, and portfolios. Fully functional offline.
+- **Data Validation & Sanitization**: Validates graduation years (1950–2035), suppresses duplicate degrees, and neutralizes Excel formula injections (`=`, `+`, `-`, `@`, `\t`, `\r` prefixed with `'`).
 - **Professional 5-Worksheet Excel Output**:
-  1. `Candidates` — High-level summary with auto-filter, frozen panes, and status-colored cells.
+  1. `Candidates` — Summary row per candidate with formatted headers, auto-filter, and color-coded status cells.
   2. `Education` — Academic history normalized by degree level and graduation year.
   3. `Work Experience` — Career history with roles, companies, dates, and responsibilities.
   4. `Projects` — Technical and personal projects with technologies.
-  5. `Processing Log` — Complete audit log detailing execution status, model used, and character counts.
+  5. `Processing Log` — Complete audit trail detailing execution status, model used, and character counts.
 
 ---
 
@@ -27,7 +28,8 @@ For detailed step-by-step setup on Windows (PowerShell) and Linux (Bash), see th
 ### 1. Installation
 
 ```bash
-# Clone and enter directory
+# Clone repository
+git clone https://github.com/anuragrathod/ResumeDrop.git
 cd ResumeDrop
 
 # Create and activate virtual environment
@@ -37,6 +39,8 @@ source .venv/bin/activate       # On Windows: .\.venv\Scripts\Activate.ps1
 # Install lightweight dependencies
 pip install -r requirements.txt
 ```
+
+> **Linux Tkinter Note**: On Debian/Ubuntu systems, if Tkinter is not already installed, run `sudo apt install python3-tk`. On Windows and macOS, Tkinter is included automatically with Python.
 
 ### 2. Configure Environment
 
@@ -56,47 +60,52 @@ DEFAULT_GROQ_MODEL=llama-3.3-70b-versatile
 MAX_WORKERS=4
 ```
 
-### 3. Launch Web App
+### 3. Launch Desktop GUI
 
 ```bash
-streamlit run app.py
+python gui.py
 ```
-Open [http://localhost:8501](http://localhost:8501) in your browser.
+
+### 4. Or Run CLI Batch Tool
+
+```bash
+# Extract sample resumes and export directly to 5-sheet Excel workbook:
+python cli_demo.py --dir sample_resumes --extract --export output/candidates.xlsx --verbose
+```
 
 ---
 
-## 💻 CLI Usage
+## 💻 Desktop GUI & CLI Features
 
-ResumeDrop includes a standalone command-line tool `cli_demo.py` for automated pipelines and DevOps workflows:
+### Desktop GUI (`gui.py`)
+- **Batch Queue**: Drag or add multiple resume files or entire directories.
+- **Worker Concurrency**: Select background worker thread count (1–8) and target Groq model.
+- **Interactive Review**: Double-click any candidate in the Treeview table to inspect validation issues, review raw document snippets, and edit fields prior to export.
+- **Excel Export**: Save structured workbooks anywhere on your filesystem.
 
-```bash
-# Preview text extraction from a single resume
-python cli_demo.py sample_resumes/alice_chen_resume.pdf --verbose
-
-# Batch process a folder and export directly to a 5-sheet Excel workbook
-python cli_demo.py --dir sample_resumes --extract --export output/candidates.xlsx --verbose
-
-# Run with AI extraction enabled
-python cli_demo.py --dir sample_resumes --extract --use-ai --export output/candidates.xlsx
-```
+### CLI Batch Tool (`cli_demo.py`)
+- Automated command-line extraction for headless environments and CI/CD pipelines:
+  ```bash
+  python cli_demo.py [files...] [--dir DIR] [--extract] [--export FILE.xlsx] [--use-ai] [--verbose]
+  ```
 
 ---
 
 ## 🧪 Testing & Quality Assurance
 
-Run the test suite:
+Run the automated test suite:
 
 ```bash
 # Run 20 unit and integration tests
 pytest
 
-# Run tests with test coverage reporting
+# Run tests with code coverage
 pytest --cov=src tests/
 
-# Run speed benchmark
+# Run extraction throughput benchmark (>900 resumes/sec)
 python scripts/benchmark.py
 
-# Run extraction accuracy against 25 ground-truth synthetic resumes
+# Run accuracy evaluation against 25 ground-truth synthetic resumes
 python scripts/evaluate_extraction.py
 ```
 
@@ -106,17 +115,17 @@ python scripts/evaluate_extraction.py
 
 ```
 ResumeDrop/
-├── app.py                      # Modern Streamlit UI application
+├── gui.py                      # Pure Python Tkinter modern desktop GUI application
 ├── cli_demo.py                 # Standalone CLI batch extraction & export tool
+├── app.py                      # Streamlit web application
 ├── requirements.txt            # Pinned, tested Python dependencies
 ├── SETUP.md                    # Windows (PowerShell) and Linux setup manual
 ├── PROJECT_AUDIT.md            # Comprehensive architecture & engineering audit
 ├── .env.example                # Multi-key Groq environment template
+├── .gitignore                  # Pure Python ignore rules
 ├── eval_data/
 │   └── dataset.py              # 25 synthetic resumes with ground-truth labels
-├── pages/
-│   └── e.py                    # Extracted text viewer page
-├── sample_resumes/             # Sample PDF and DOCX resumes
+├── sample_resumes/             # Sample PDF and DOCX test resumes
 ├── schemas/
 │   └── candidate.py            # Canonical Pydantic v2 data models
 ├── scripts/
@@ -136,6 +145,6 @@ ResumeDrop/
 
 ## 🔒 Security
 
-- **Formula Injection Prevention**: Input beginning with `=`, `@`, `+`, `-`, `\t`, or `\r` is escaped with a leading single quote `'` before writing to Excel worksheets.
-- **Credential Protection**: API keys are isolated in local environment variables and memory; never hardcoded or logged in outputs.
-- **Safe Parsing**: Native Python document readers protect against PDF/DOCX macro execution and external entity expansion.
+- **Formula Injection Prevention**: Cell contents starting with `=`, `@`, `+`, `-`, `\t`, or `\r` are safely escaped with a leading single quote `'`.
+- **Zero Credential Leakage**: API keys reside solely in environment variables and are never exported to workbooks or logs.
+- **Safe Document Ingestion**: Native Python readers prevent macro execution, shell spawning, and external entity resolution.

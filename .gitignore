@@ -1,5 +1,5 @@
 # =============================================================================
-# Resume-to-Excel Automation System — .gitignore
+# ResumeDrop — Python-Only .gitignore
 # =============================================================================
 
 # --- Virtual environments ---
@@ -20,6 +20,7 @@ build/
 *.egg-info/
 *.egg
 .eggs/
+.vite/
 
 # --- Test / coverage ---
 .pytest_cache/
@@ -27,54 +28,29 @@ build/
 htmlcov/
 *.xml
 
-# --- Generated output (never commit real resumes or results) ---
+# --- Generated output ---
 output/*.xlsx
 output/*.csv
 eval_results/
+!output/.gitkeep
 
-# --- Uploaded / processed resumes (privacy) ---
-sample_resumes/*.pdf
-sample_resumes/*.docx
-sample_resumes/*.PDF
-sample_resumes/*.DOCX
-# Allow the README inside sample_resumes
-!sample_resumes/README.md
-
-# --- Temporary files ---
-*.tmp
-*.temp
-*.bak
-~$*
-
-# --- OS-generated ---
-.DS_Store
-Thumbs.db
-desktop.ini
-ehthumbs.db
-
-# --- IDE / editor ---
+# --- AI Studio & Editor artifacts ---
+.aistudio/
 .idea/
 .vscode/
 *.sublime-project
 *.sublime-workspace
 
+# --- OS-generated ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
 # --- Secrets and credentials ---
 .env
 *.env
+!.env.example
 secrets.json
-
-# --- External submodules / vendored source ---
-docling-main/
 
 # --- Logs ---
 *.log
-
-# --- Keep empty output directory in Git ---
-!output/.gitkeep
-
-# --- Ollama model files (stored globally, not in project) ---
-*.gguf
-*.bin
-models/
-
-
