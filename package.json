@@ -1,0 +1,10 @@
+{
+  "name": "resumedrop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ResumeDrop - AI Resume Extraction & Excel Automation",
+  "scripts": {
+    "dev": "streamlit run app.py --server.port 3000 --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false",
+    "start": "streamlit run app.py --server.port 3000 --server.address 0.0.0.0 --server.headless true --server.enableCORS false --server.enableXsrfProtection false"
+  }
+}

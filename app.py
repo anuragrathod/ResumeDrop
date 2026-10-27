@@ -356,86 +356,28 @@ if st.session_state.selected_model not in available_groq_models:
 # ---------------------------------------------------------------------------
 # Header Section & Top Action Controls
 # ---------------------------------------------------------------------------
-hdr_col, reset_col = st.columns([4, 1], vertical_alignment="center")
+hdr_col, action_col = st.columns([4, 1], vertical_alignment="center")
 with hdr_col:
     st.markdown("""
     <h1 class="rd-title">Resume to Excel</h1>
     <p class="rd-lede">Drop PDF, DOCX, or TXT resumes below. Candidate details are extracted into a formatted 5-worksheet Excel workbook you can review and edit first.</p>
     """, unsafe_allow_html=True)
 
-with reset_col:
+with action_col:
     if st.button("Reset workspace", key="main_reset_btn", use_container_width=True):
         _reset_workspace()
+    
+    if st.button("Retest connection", key="retest_conn_btn", use_container_width=True):
+        with st.spinner("Testing API connection..."):
+            is_conn, msg = check_groq_available(pool)
+            st.session_state["last_connection_test"] = (is_conn, msg)
 
-# ---------------------------------------------------------------------------
-# API Connection Status Strip (Verified On Load)
-# ---------------------------------------------------------------------------
-if st.session_state.rules_only:
-    st.info("Offline Mode: Rules-only regex extraction active (No AI API calls)", icon="ℹ️")
-elif is_api_connected:
-    st.success(
-        f"Groq API Connected: {pool.active_count}/{pool.total_count} keys active (Verified on app load) · Model: {st.session_state.selected_model} · {st.session_state.max_workers} Worker(s)",
-        icon="🟢",
-    )
-elif pool.total_count > 0:
-    st.warning(
-        f"Groq API Connection Issue: {api_status_message} · Running with rule-based fallback",
-        icon="⚠️",
-    )
-else:
-    st.warning(
-        "No Groq API Keys Configured · Operating in Offline / Rule-Based Mode (Email, Phone, Links, Location)",
-        icon="🟡",
-    )
-
-# ---------------------------------------------------------------------------
-# Collapsible Configuration & Key Manager Expander
-# ---------------------------------------------------------------------------
-with st.expander("⚙️ Engine Configuration & Multi-Key Pool", expanded=(pool.total_count == 0)):
-    cfg_col1, cfg_col2, cfg_col3 = st.columns([2, 1, 1])
-
-    with cfg_col1:
-        keys_input = st.text_area(
-            "Groq API Keys (multi-key pool)",
-            value=current_keys_raw,
-            placeholder="gsk_key1..., gsk_key2..., gsk_key3...",
-            height=70,
-            help="Provide 1–3 Groq API keys separated by commas or newlines for parallel acceleration and rate-limit failover.",
-        )
-        if st.button("Apply & Test Keys", key="apply_keys_btn", use_container_width=True):
-            _save_keys_to_env(keys_input)
-            st.session_state.custom_keys_text = keys_input
-            _get_key_pool.clear()
-            st.rerun()
-
-    with cfg_col2:
-        model_idx = available_groq_models.index(st.session_state.selected_model) if st.session_state.selected_model in available_groq_models else 0
-        selected_model = st.selectbox(
-            "Model",
-            options=available_groq_models,
-            index=model_idx,
-            disabled=st.session_state.rules_only,
-            help="Groq Cloud LPU inference model.",
-        )
-        st.session_state.selected_model = selected_model
-
-        rules_only = st.checkbox(
-            "Rules-only mode (100% offline)",
-            value=st.session_state.rules_only,
-            help="Extract email, phone, and links using regex only. No AI inference calls.",
-        )
-        st.session_state.rules_only = rules_only
-
-    with cfg_col3:
-        max_workers = st.slider(
-            "Parallel Workers",
-            min_value=1,
-            max_value=4,
-            value=st.session_state.max_workers,
-            disabled=st.session_state.rules_only,
-            help="Processes multiple resumes in parallel across your Groq keys.",
-        )
-        st.session_state.max_workers = max_workers
+if "last_connection_test" in st.session_state:
+    is_conn, msg = st.session_state["last_connection_test"]
+    if is_conn:
+        st.success(f"Groq API Connected: {pool.active_count}/{pool.total_count} keys active · {msg}", icon="🟢")
+    else:
+        st.error(f"Groq API Connection Failed: {msg}", icon="🔴")
 
 
 # ---------------------------------------------------------------------------
