@@ -227,7 +227,7 @@ logs = get_api_call_logs()
 total_calls = len(logs)
 success_calls = sum(1 for e in logs if e.status == "SUCCESS")
 rate_limit_calls = sum(1 for e in logs if e.status == "RATE_LIMITED")
-failed_calls = sum(1 for e in logs if e.status in ("FAILED", "AUTH_ERROR", "PARSE_ERROR"))
+failed_calls = sum(1 for e in logs if e.status in ("FAILED", "AUTH_ERROR", "PARSE_ERROR", "TIMEOUT"))
 
 col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
 col_m1.metric("Total Calls", total_calls)
@@ -298,6 +298,9 @@ else:
         elif entry.status == "AUTH_ERROR":
             badge_class = "error"
             badge_text = f"401 Auth Error"
+        elif entry.status == "TIMEOUT":
+            badge_class = "rate-limited"
+            badge_text = f"504 Timeout"
         else:
             badge_class = "error"
             badge_text = f"{entry.http_status} {entry.status}"

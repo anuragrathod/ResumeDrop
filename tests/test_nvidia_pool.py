@@ -230,3 +230,51 @@ def test_reload_all_three_keys_from_env(monkeypatch):
     assert pool.keys[0].key == "nvapi-key11111111111111111111"
     assert pool.keys[1].key == "nvapi-key22222222222222222222"
     assert pool.keys[2].key == "nvapi-key33333333333333333333"
+
+
+def test_ai_config_timeout_defaults_and_env(monkeypatch):
+    from src.ai_extractor import AIConfig
+
+    # Default timeout is 180s to prevent premature 500/504 timeouts on large models
+    monkeypatch.delenv("NVIDIA_API_TIMEOUT", raising=False)
+    monkeypatch.delenv("REQUEST_TIMEOUT", raising=False)
+    cfg_default = AIConfig()
+    assert cfg_default.timeout == 180
+
+    # Respects NVIDIA_API_TIMEOUT
+    monkeypatch.setenv("NVIDIA_API_TIMEOUT", "240")
+    cfg_env = AIConfig()
+    assert cfg_env.timeout == 240
+
+    # Respects explicit argument
+    cfg_explicit = AIConfig(timeout=300)
+    assert cfg_explicit.timeout == 300
+
+
+def test_api_call_logging_timeout():
+    from src.ai_extractor import (
+        clear_api_call_logs,
+        get_api_call_logs,
+        record_api_call_log,
+        NvidiaKeyStatus,
+    )
+
+    clear_api_call_logs()
+    key_stat = NvidiaKeyStatus(key="nvapi-test1234567890abcdef", index=0)
+    record_api_call_log(
+        document_name="large_resume.pdf",
+        model="meta/llama-3.3-70b-instruct",
+        key_status=key_stat,
+        status="TIMEOUT",
+        http_status=504,
+        latency_ms=180120.0,
+        error_detail="Request timed out after 180s",
+    )
+
+    logs = get_api_call_logs()
+    assert len(logs) == 1
+    assert logs[0].status == "TIMEOUT"
+    assert logs[0].http_status == 504
+    assert "Request timed out after 180s" in logs[0].error_detail
+    clear_api_call_logs()
+

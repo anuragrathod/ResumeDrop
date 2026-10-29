@@ -52,6 +52,7 @@ from src.ai_extractor import (
     AIExtractor,
     NvidiaKeyPool,
     check_nvidia_available,
+    get_default_timeout,
     list_nvidia_models,
 )
 from src.document_reader import DocumentReader, DocumentResult, ProcessingStatus
@@ -296,7 +297,8 @@ def _init_state() -> None:
         "edited": {},
         "selected_model": DEFAULT_NVIDIA_MODEL,
         "custom_keys_text": "",
-        "max_workers": 3,
+        "max_workers": int(os.getenv("MAX_WORKERS", "3")),
+        "request_timeout": get_default_timeout(),
         "rules_only": False,
     }
     for k, v in defaults.items():
@@ -321,16 +323,18 @@ def _reset_workspace() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _save_keys_to_env(keys_str: str) -> None:
-    """Save provided NVIDIA keys to .env file for persistence."""
+def _save_keys_to_env(keys_str: str, timeout: Optional[int] = None) -> None:
+    """Save provided NVIDIA keys and timeout to .env file for persistence."""
     env_file = Path(__file__).resolve().parent / ".env"
     cleaned_keys = [k.strip() for k in re.split(r"[,;\s\n]+", keys_str) if k.strip().startswith("nvapi-")]
-    if not cleaned_keys:
+    timeout_val = timeout or st.session_state.get("request_timeout", 180)
+    if not cleaned_keys and timeout is None:
         return
 
-    joined = ", ".join(cleaned_keys)
+    joined = ", ".join(cleaned_keys) if cleaned_keys else ""
     lines = []
     found_keys = False
+    found_timeout = False
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             if line.startswith("NVIDIA_API_KEYS="):
@@ -342,17 +346,26 @@ def _save_keys_to_env(keys_str: str) -> None:
                 lines.append(f"NVIDIA_API_KEY_2={cleaned_keys[1]}")
             elif line.startswith("NVIDIA_API_KEY_3=") and len(cleaned_keys) >= 3:
                 lines.append(f"NVIDIA_API_KEY_3={cleaned_keys[2]}")
+            elif line.startswith("REQUEST_TIMEOUT=") or line.startswith("NVIDIA_API_TIMEOUT="):
+                lines.append(f"REQUEST_TIMEOUT={timeout_val}")
+                found_timeout = True
             else:
                 lines.append(line)
-    if not found_keys:
+    if not found_keys and joined:
         lines.append(f"NVIDIA_API_KEYS={joined}")
         for idx, k in enumerate(cleaned_keys[:3], start=1):
             lines.append(f"NVIDIA_API_KEY_{idx}={k}")
+    if not found_timeout:
+        lines.append(f"REQUEST_TIMEOUT={timeout_val}")
+        lines.append(f"NVIDIA_API_TIMEOUT={timeout_val}")
 
     env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.environ["NVIDIA_API_KEYS"] = joined
-    for idx, k in enumerate(cleaned_keys[:3], start=1):
-        os.environ[f"NVIDIA_API_KEY_{idx}"] = k
+    if joined:
+        os.environ["NVIDIA_API_KEYS"] = joined
+        for idx, k in enumerate(cleaned_keys[:3], start=1):
+            os.environ[f"NVIDIA_API_KEY_{idx}"] = k
+    os.environ["REQUEST_TIMEOUT"] = str(timeout_val)
+    os.environ["NVIDIA_API_TIMEOUT"] = str(timeout_val)
 
 
 @st.cache_resource(show_spinner=False)
@@ -496,7 +509,7 @@ with st.expander(f"⚙ NVIDIA NIM Key Pool & Settings ({pool.active_count}/{pool
     with col_k3:
         new_k3 = st.text_input("NVIDIA Key 3", value=k3_val, type="password", key="inp_key_3")
 
-    col_btn_save, col_model_sel = st.columns([1, 2])
+    col_btn_save, col_model_sel, col_timeout = st.columns([1, 1.4, 1.4])
     with col_btn_save:
         if st.button("Save & Update Keys", key="save_keys_btn", use_container_width=True):
             updated_keys = [
@@ -505,7 +518,7 @@ with st.expander(f"⚙ NVIDIA NIM Key Pool & Settings ({pool.active_count}/{pool
                 if k.strip().startswith("nvapi-")
             ]
             if updated_keys:
-                _save_keys_to_env(", ".join(updated_keys))
+                _save_keys_to_env(", ".join(updated_keys), timeout=st.session_state.request_timeout)
                 st.session_state.custom_keys_text = ", ".join(updated_keys)
                 _get_key_pool.clear()
                 st.success(f"Saved {len(updated_keys)} keys to pool!")
@@ -523,6 +536,22 @@ with st.expander(f"⚙ NVIDIA NIM Key Pool & Settings ({pool.active_count}/{pool
         if chosen_model != st.session_state.selected_model:
             st.session_state.selected_model = chosen_model
             st.rerun()
+
+    with col_timeout:
+        chosen_timeout = st.number_input(
+            "API Timeout (seconds)",
+            min_value=30,
+            max_value=600,
+            value=int(st.session_state.request_timeout),
+            step=15,
+            help="Per-request HTTP timeout for NVIDIA NIM inference (default: 180s). High timeouts prevent '500/504 Request timed out' on long resumes.",
+            key="timeout_number_input",
+        )
+        if chosen_timeout != st.session_state.request_timeout:
+            st.session_state.request_timeout = int(chosen_timeout)
+            os.environ["NVIDIA_API_TIMEOUT"] = str(chosen_timeout)
+            os.environ["REQUEST_TIMEOUT"] = str(chosen_timeout)
+            _save_keys_to_env(st.session_state.custom_keys_text, timeout=int(chosen_timeout))
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +633,7 @@ if process_clicked and uploaded_files and not st.session_state.processed:
         config = AIConfig(
             model=st.session_state.selected_model,
             key_pool=pool,
+            timeout=st.session_state.request_timeout,
         )
         ai_extractor = AIExtractor(config=config)
 

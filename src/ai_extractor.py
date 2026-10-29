@@ -50,6 +50,30 @@ FALLBACK_NVIDIA_MODELS = [
     "mistralai/mistral-large-2-instruct",
 ]
 DEFAULT_RATE_LIMIT_RPM = int(os.getenv("NVIDIA_RATE_LIMIT_RPM", "40"))
+DEFAULT_REQUEST_TIMEOUT = 180
+
+
+def get_default_timeout() -> int:
+    """
+    Get the default per-request timeout in seconds.
+    Prioritizes NVIDIA_API_TIMEOUT, then REQUEST_TIMEOUT (if > 60s), defaulting to 180s
+    to prevent premature timeouts on deep reasoning models and multi-page resumes.
+    """
+    nv_val = os.getenv("NVIDIA_API_TIMEOUT")
+    if nv_val:
+        try:
+            return int(nv_val)
+        except ValueError:
+            pass
+    req_val = os.getenv("REQUEST_TIMEOUT")
+    if req_val:
+        try:
+            v = int(req_val)
+            if v > 60:
+                return v
+        except ValueError:
+            pass
+    return DEFAULT_REQUEST_TIMEOUT
 
 
 # ---------------------------------------------------------------------------
@@ -456,9 +480,9 @@ class AIConfig:
     base_url: str = NVIDIA_BASE_URL
     key_pool: NvidiaKeyPool = field(default_factory=lambda: _GLOBAL_KEY_POOL)
     rate_limiter: NvidiaRateLimiter = field(default_factory=lambda: _GLOBAL_RATE_LIMITER)
-    timeout: int = 45
+    timeout: int = field(default_factory=get_default_timeout)
     max_retries: int = 3
-    retry_delay: float = 1.0
+    retry_delay: float = 2.0
     temperature: float = 0.1
     num_predict: int = 4096
     prompt_path: Path = field(default_factory=lambda: _DEFAULT_PROMPT_PATH)
@@ -553,7 +577,7 @@ def list_nvidia_models(api_key: Optional[str] = None, base_url: str = NVIDIA_BAS
     try:
         from openai import OpenAI
 
-        client = OpenAI(base_url=base_url, api_key=key, timeout=10.0, max_retries=0)
+        client = OpenAI(base_url=base_url, api_key=key, timeout=30.0, max_retries=0)
         models_resp = client.models.list()
         chat_models: list[str] = []
         for m in models_resp.data:
@@ -596,7 +620,7 @@ def check_nvidia_available(
     try:
         from openai import OpenAI
 
-        client = OpenAI(base_url=base_url, api_key=key_status.key, timeout=10.0, max_retries=0)
+        client = OpenAI(base_url=base_url, api_key=key_status.key, timeout=30.0, max_retries=0)
         client.models.list()
         latency_ms = (time.monotonic() - t0) * 1000
         p.release_key(key_status)
@@ -613,9 +637,11 @@ def check_nvidia_available(
         latency_ms = (time.monotonic() - t0) * 1000
         p.release_key(key_status)
         err_str = str(exc)
-        is_auth = "401" in err_str or "AuthenticationError" in type(exc).__name__
-        http_code = 401 if is_auth else 500
-        status_name = "AUTH_ERROR" if is_auth else "FAILED"
+        err_type = type(exc).__name__
+        is_auth = "401" in err_str or "AuthenticationError" in err_type
+        is_timeout = "timeout" in err_str.lower() or "timed out" in err_str.lower() or "APITimeoutError" in err_type or "Timeout" in err_type
+        http_code = 401 if is_auth else (504 if is_timeout else 500)
+        status_name = "AUTH_ERROR" if is_auth else ("TIMEOUT" if is_timeout else "FAILED")
         record_api_call_log(
             document_name="Connectivity Check (models.list)",
             model="system/models",
@@ -627,6 +653,8 @@ def check_nvidia_available(
         )
         if is_auth:
             return False, f"Invalid NVIDIA key {key_status.masked_key}. Check build.nvidia.com/models"
+        if is_timeout:
+            return False, f"Connection timed out after 30s. NVIDIA NIM endpoint may be busy or slow."
         return False, f"Could not connect to NVIDIA NIM: {exc}"
 
 
@@ -675,7 +703,7 @@ def make_test_api_call(
     try:
         from openai import OpenAI
 
-        client = OpenAI(base_url=base_url, api_key=key_status.key, timeout=12.0, max_retries=0)
+        client = OpenAI(base_url=base_url, api_key=key_status.key, timeout=45.0, max_retries=0)
         resp = client.chat.completions.create(
             model=m,
             messages=[
@@ -703,7 +731,8 @@ def make_test_api_call(
         latency_ms = (time.monotonic() - t0) * 1000
         p.release_key(key_status)
         err_str = str(exc)
-        if "429" in err_str:
+        err_type = type(exc).__name__
+        if "429" in err_str or "RateLimitError" in err_type:
             p.record_rate_limit(key_status, backoff_seconds=10.0)
             record_api_call_log(
                 document_name="Ping Test",
@@ -715,7 +744,7 @@ def make_test_api_call(
                 error_detail=err_str,
             )
             return False, f"HTTP 429 Rate Limited: {err_str}"
-        elif "401" in err_str:
+        elif "401" in err_str or "AuthenticationError" in err_type:
             key_status.is_active = False
             record_api_call_log(
                 document_name="Ping Test",
@@ -727,6 +756,17 @@ def make_test_api_call(
                 error_detail="Invalid API Key",
             )
             return False, f"HTTP 401 Auth Error: {err_str}"
+        elif "timeout" in err_str.lower() or "timed out" in err_str.lower() or "APITimeoutError" in err_type or "Timeout" in err_type:
+            record_api_call_log(
+                document_name="Ping Test",
+                model=m,
+                key_status=key_status,
+                status="TIMEOUT",
+                http_status=504,
+                latency_ms=latency_ms,
+                error_detail=f"Ping timed out after 45s: {err_str}",
+            )
+            return False, f"Request timed out after 45s ({err_str})"
         else:
             p.record_failure(key_status, err_str)
             record_api_call_log(
@@ -804,9 +844,10 @@ class AIExtractor:
 
         for attempt in range(1, self.config.max_retries + 1):
             # 1. Acquire permit from shared rate limiter (max 40 RPM across all keys)
-            permit_granted = self.config.rate_limiter.acquire(timeout=60.0)
+            limiter_timeout = max(90.0, float(self.config.timeout))
+            permit_granted = self.config.rate_limiter.acquire(timeout=limiter_timeout)
             if not permit_granted:
-                last_error = "Rate limit wait timeout (application exceeding 40 RPM budget)."
+                last_error = f"Rate limit wait timeout after {limiter_timeout:.0f}s (application exceeding 40 RPM budget)."
                 logger.warning("[%s] %s", filename, last_error)
                 time.sleep(self.config.retry_delay)
                 continue
@@ -934,7 +975,40 @@ class AIExtractor:
                     logger.error("[%s] %s", filename, last_error)
                     continue
 
-                # Transient model error or timeout
+                # Timeout handling (APITimeoutError, ReadTimeout, socket timeout)
+                is_timeout = (
+                    "timeout" in err_str.lower()
+                    or "timed out" in err_str.lower()
+                    or "APITimeoutError" in err_type
+                    or "TimeoutException" in err_type
+                    or "ReadTimeout" in err_type
+                    or "Timeout" in err_type
+                )
+                if is_timeout:
+                    self.config.key_pool.record_failure(key_status, f"Timeout after {self.config.timeout}s")
+                    record_api_call_log(
+                        document_name=filename or "Resume Extraction",
+                        model=self.config.model,
+                        key_status=key_status,
+                        status="TIMEOUT",
+                        http_status=504,
+                        latency_ms=elapsed_ms,
+                        error_detail=f"Request timed out after {self.config.timeout}s (attempt {attempt}/{self.config.max_retries})",
+                    )
+                    last_error = f"Request timed out after {self.config.timeout}s on key {key_status.masked_key}"
+                    logger.warning(
+                        "[%s] Timeout on key %s after %ds: %s (attempt %d/%d)",
+                        filename,
+                        key_status.masked_key,
+                        self.config.timeout,
+                        exc,
+                        attempt,
+                        self.config.max_retries,
+                    )
+                    time.sleep(self.config.retry_delay * attempt)
+                    continue
+
+                # Transient model error
                 self.config.key_pool.record_failure(key_status, err_str)
                 record_api_call_log(
                     document_name=filename or "Resume Extraction",
