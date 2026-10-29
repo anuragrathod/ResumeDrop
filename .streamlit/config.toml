@@ -5,9 +5,15 @@ headless = true
 enableCORS = false
 enableXsrfProtection = false
 enableWebsocketCompression = false
-disconnectedSessionTTL = 300
+disconnectedSessionTTL = 86400
 fileWatcherType = "none"
+maxUploadSize = 50
+maxMessageSize = 50
 
 [browser]
 gatherUsageStats = false
+
+[client]
+showErrorDetails = true
+toolbarMode = "minimal"
 
