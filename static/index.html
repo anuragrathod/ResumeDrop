@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ResumeDrop</title>
+    <meta name="description" content="Resume-to-Excel automation system extracting candidate profiles, education, work experience, projects, and skills into formatted 5-sheet workbooks.">
+    <meta property="og:title" content="ResumeDrop">
+    <meta property="og:description" content="Resume-to-Excel automation system extracting candidate profiles, education, work experience, projects, and skills into formatted 5-sheet workbooks.">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <!-- Top Navigation Header -->
+    <header class="rd-header">
+        <div class="rd-brand" id="brand-link" role="button" tabindex="0">
+            <span class="rd-brand-icon">📄</span>
+            <span>ResumeDrop</span>
+        </div>
+
+        <nav class="rd-nav" role="tablist" aria-label="Main Navigation">
+            <button class="rd-nav-item active" id="tab-home" role="tab" aria-selected="true" data-view="home">Home</button>
+            <button class="rd-nav-item" id="tab-logs" role="tab" aria-selected="false" data-view="logs">API Logs</button>
+        </nav>
+
+        <div class="rd-header-actions">
+            <button class="btn btn-secondary btn-sm" id="btn-export-excel" disabled title="Export extracted candidates to 5-sheet Excel workbook">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                Export Excel (.xlsx)
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content Viewport -->
+    <main class="rd-main">
+
+        <!-- ==================================================================
+             VIEW 1: HOME PAGE (Resume Extractor & Live Processing)
+             ================================================================== -->
+        <section id="view-home" class="rd-view active">
+            <div class="rd-hero">
+                <h1 class="rd-title">Resume-to-Excel Automation</h1>
+                <p class="rd-subtitle">Drop resumes (PDF, DOCX, TXT) to parse candidate profiles, education, work history, and skills into a formatted 5-sheet Excel workbook.</p>
+            </div>
+
+            <!-- Upload Card -->
+            <div class="rd-card">
+                <div class="rd-dropzone" id="dropzone" tabindex="0">
+                    <input type="file" id="file-input" class="rd-file-input" multiple accept=".pdf,.docx,.txt">
+                    <div class="rd-dropzone-icon">📁</div>
+                    <div class="rd-dropzone-title">Drop resume files here or click to browse</div>
+                    <div class="rd-dropzone-desc">Supports PDF, DOCX, and TXT (up to 10 MB per file)</div>
+                </div>
+
+                <div id="queue-container" style="display: none;">
+                    <div class="rd-queue-list" id="queue-list"></div>
+                </div>
+
+                <div class="rd-actions-bar">
+                    <div style="font-size: 0.88rem; color: var(--muted);" id="queue-summary">0 files queued</div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-ghost btn-sm" id="btn-clear-queue" disabled>Clear Queue</button>
+                        <button class="btn btn-primary" id="btn-extract" disabled>
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                            </svg>
+                            Extract Candidates
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Real Load Bar Card -->
+            <div class="rd-progress-card" id="progress-card" style="display: none;">
+                <div class="rd-progress-header">
+                    <span class="rd-progress-label" id="progress-label">Processing resumes...</span>
+                    <span class="rd-progress-stats" id="progress-stats">0 of 0 (0%)</span>
+                </div>
+                <div class="rd-progress-track">
+                    <div class="rd-progress-bar" id="progress-bar"></div>
+                </div>
+                <div class="rd-progress-filename" id="progress-filename">Preparing extraction queue...</div>
+            </div>
+
+            <!-- Extracted Candidates Results Table -->
+            <div class="rd-table-card">
+                <div class="rd-table-header">
+                    <span class="rd-table-title">Extracted Candidates</span>
+                    <span class="rd-table-count" id="candidate-count">0 candidates</span>
+                </div>
+                <div class="rd-table-wrap">
+                    <table class="rd-table" id="candidate-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Candidate Name</th>
+                                <th>Email</th>
+                                <th>Phone</th>
+                                <th>Location</th>
+                                <th>Highest Degree</th>
+                                <th class="rd-col-right">Exp (Yrs)</th>
+                                <th>Status</th>
+                                <th class="rd-col-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="candidate-tbody">
+                            <tr>
+                                <td colspan="9" class="rd-empty">
+                                    <div class="rd-empty-icon">📄</div>
+                                    <div class="rd-empty-title">No candidates extracted yet</div>
+                                    <div class="rd-empty-desc">Upload resumes above and click Extract Candidates to begin.</div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             VIEW 2: LOGS PAGE (API Call Logs & Connection Prober)
+             ================================================================== -->
+        <section id="view-logs" class="rd-view">
+            <div class="rd-hero" style="display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+                <div>
+                    <h1 class="rd-title">API Call Logs</h1>
+                    <p class="rd-subtitle">Monitor outbound NVIDIA NIM API calls, model latencies, and connectivity.</p>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-primary" id="btn-check-connection">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                            <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                        </svg>
+                        Check connection
+                    </button>
+                    <button class="btn btn-secondary btn-sm" id="btn-refresh-logs">Refresh</button>
+                    <button class="btn btn-ghost btn-sm" id="btn-clear-logs">Clear Logs</button>
+                </div>
+            </div>
+
+            <!-- Auto-Fading Connection Alert Banner -->
+            <div id="connection-alert-container"></div>
+
+            <!-- Strict 5-Column Logs Table -->
+            <div class="rd-table-card">
+                <div class="rd-table-header">
+                    <span class="rd-table-title">Recent API Requests</span>
+                    <span class="rd-table-count" id="log-count">0 calls</span>
+                </div>
+                <div class="rd-table-wrap">
+                    <table class="rd-table" id="logs-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Used for (Type)</th>
+                                <th>Model</th>
+                                <th class="rd-col-right">Latency</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logs-tbody">
+                            <tr>
+                                <td colspan="5" class="rd-empty">
+                                    <div class="rd-empty-icon">📊</div>
+                                    <div class="rd-empty-title">No API calls recorded yet</div>
+                                    <div class="rd-empty-desc">API calls made during extraction or connection checks will appear here.</div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Candidate Detail Modal -->
+    <div class="rd-modal-overlay" id="modal-overlay" style="display: none;">
+        <div class="rd-modal">
+            <div class="rd-modal-header">
+                <span class="rd-modal-title" id="modal-candidate-name">Candidate Details</span>
+                <button class="rd-modal-close" id="modal-close-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="rd-modal-body" id="modal-candidate-body">
+                <!-- Dynamically populated -->
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
