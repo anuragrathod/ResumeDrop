@@ -5,6 +5,9 @@ headless = true
 enableCORS = false
 enableXsrfProtection = false
 enableWebsocketCompression = false
+disconnectedSessionTTL = 300
+fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false
+

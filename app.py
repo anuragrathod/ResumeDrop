@@ -403,18 +403,23 @@ else:
 
 pool = _get_key_pool(effective_keys)
 
-# Verify API keys connectivity whenever app is loaded
-is_api_connected = False
-api_status_message = "No keys configured"
-if pool.total_count > 0:
-    is_api_connected, api_status_message = check_nvidia_available(pool)
-
 # Model selector list
 available_nvidia_models = list(_AVAILABLE_MODELS)
-if is_api_connected and pool.total_count > 0:
-    fetched = list_nvidia_models(pool.keys[0].key)
-    if fetched:
-        available_nvidia_models = fetched
+
+# Check or retrieve cached connection status without blocking page render
+if "conn_status" not in st.session_state:
+    if pool.total_count > 0:
+        st.session_state["conn_status"] = (
+            True,
+            f"NVIDIA NIM configured ({pool.active_count}/{pool.total_count} keys active · max {pool.rate_limiter.max_requests} RPM)",
+        )
+    else:
+        st.session_state["conn_status"] = (
+            False,
+            "No keys configured. Set NVIDIA_API_KEY_1, NVIDIA_API_KEY_2, NVIDIA_API_KEY_3 in .env.",
+        )
+
+is_api_connected, api_status_message = st.session_state["conn_status"]
 
 if st.session_state.selected_model not in available_nvidia_models:
     st.session_state.selected_model = available_nvidia_models[0]
@@ -450,6 +455,7 @@ with action_col:
     if st.button("Retest connection", key="retest_conn_btn", use_container_width=True):
         with st.spinner("Testing NVIDIA NIM connection..."):
             is_conn, msg = check_nvidia_available(pool)
+            st.session_state["conn_status"] = (is_conn, msg)
             st.session_state["last_connection_test"] = (is_conn, msg)
 
 if "last_connection_test" in st.session_state:
@@ -544,7 +550,10 @@ if uploaded_files:
 
     chips_html = '<div class="rd-files">'
     for uf in uploaded_files:
-        size_kb = len(uf.getvalue()) / 1024
+        try:
+            size_kb = len(uf.getvalue()) / 1024
+        except Exception:
+            size_kb = (uf.size / 1024) if hasattr(uf, "size") and uf.size else 0.0
         is_dup = uf.name in duplicate_names
         chips_html += (
             f'<div class="rd-file{" dup" if is_dup else ""}">'
