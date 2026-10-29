@@ -11,12 +11,15 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from schemas.candidate import CandidateRecord, EducationRecord, ExtractionMetadata, WorkExperience
 from src.document_reader import DocumentResult, ProcessingStatus
 
 
 def test_gui_imports_and_constants():
-    """Verify gui module imports without error."""
+    """Verify gui module imports without error when tkinter is available."""
+    pytest.importorskip("tkinter")
     import gui
 
     assert hasattr(gui, "ResumeDropApp")

@@ -1,6 +1,6 @@
 # ResumeDrop — Setup & Installation Guide
 
-This document provides verified, step-by-step installation, configuration, execution, and troubleshooting instructions for **Windows (PowerShell)** and **Linux (Bash)** environments for the pure Python ResumeDrop application.
+This document provides verified, step-by-step installation, configuration, execution, and troubleshooting instructions for **Windows (PowerShell)** and **Linux (Bash)** environments for the pure Python ResumeDrop application powered by **NVIDIA NIM APIs**.
 
 ---
 
@@ -12,7 +12,18 @@ This document provides verified, step-by-step installation, configuration, execu
 | **Operating System** | Windows 10/11 (PowerShell 5.1+ / PowerShell 7+) or Linux (Ubuntu 20.04+, Debian 11+, RHEL/Fedora) |
 | **GUI Framework** | Python `tkinter` (included on Windows/macOS; `python3-tk` on Debian/Ubuntu) |
 | **Disk Space** | ~250 MB for dependencies (lightweight; no PyTorch or Docling bloat) |
-| **API Keys** | 1 to 3 Groq API keys (free tier available at [console.groq.com](https://console.groq.com/keys)) |
+| **API Keys** | 3 NVIDIA API keys belonging to the same account (free tier available at [build.nvidia.com](https://build.nvidia.com/)) |
+| **Target Rate Limit** | Up to 40 requests/minute shared across all 3 keys combined |
+
+---
+
+## 🔑 Obtaining Your 3 NVIDIA API Keys
+
+1. Visit **[https://build.nvidia.com/](https://build.nvidia.com/)** and sign in or create a free NVIDIA Developer account (no credit card required).
+2. Go to **[https://build.nvidia.com/models](https://build.nvidia.com/models)** and select a model with the **Free Endpoint** tag, such as **Meta Llama 3.3 70B Instruct** (`meta/llama-3.3-70b-instruct`).
+3. Click **Get API Key** to generate an API key starting with `nvapi-`.
+4. Generate three distinct API keys under your account.
+5. Copy all three keys into your `.env` configuration file as `NVIDIA_API_KEY_1`, `NVIDIA_API_KEY_2`, and `NVIDIA_API_KEY_3`.
 
 ---
 
@@ -63,13 +74,16 @@ Open `.env` in Notepad:
 notepad .env
 ```
 
-Add your Groq API keys (1, 2, or 3 keys to enable round-robin rotation and HTTP 429 failover):
+Add your 3 NVIDIA API keys:
 ```env
-GROQ_API_KEY_1=gsk_your_key_1
-GROQ_API_KEY_2=gsk_your_key_2
-GROQ_API_KEY_3=gsk_your_key_3
-DEFAULT_GROQ_MODEL=llama-3.3-70b-versatile
-MAX_WORKERS=4
+NVIDIA_API_KEY_1=nvapi-your_first_key_here
+NVIDIA_API_KEY_2=nvapi-your_second_key_here
+NVIDIA_API_KEY_3=nvapi-your_third_key_here
+
+DEFAULT_NVIDIA_MODEL=meta/llama-3.3-70b-instruct
+NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_RATE_LIMIT_RPM=40
+MAX_WORKERS=3
 ```
 
 ### Step 6: Start the Application
@@ -148,13 +162,16 @@ cp .env.example .env
 nano .env   # or vim .env
 ```
 
-Configure your Groq key pool:
+Configure your NVIDIA key pool:
 ```env
-GROQ_API_KEY_1=gsk_your_key_1
-GROQ_API_KEY_2=gsk_your_key_2
-GROQ_API_KEY_3=gsk_your_key_3
-DEFAULT_GROQ_MODEL=llama-3.3-70b-versatile
-MAX_WORKERS=4
+NVIDIA_API_KEY_1=nvapi-your_first_key_here
+NVIDIA_API_KEY_2=nvapi-your_second_key_here
+NVIDIA_API_KEY_3=nvapi-your_third_key_here
+
+DEFAULT_NVIDIA_MODEL=meta/llama-3.3-70b-instruct
+NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_RATE_LIMIT_RPM=40
+MAX_WORKERS=3
 ```
 
 ### Step 6: Start the Application
@@ -168,6 +185,11 @@ python3 gui.py
 #### Option B: CLI Batch Tool
 ```bash
 python3 cli_demo.py --dir sample_resumes --extract --export output/candidates.xlsx --verbose
+```
+
+#### Option C: Streamlit Web UI
+```bash
+bash run_dev.sh
 ```
 
 ### Step 7: Run Unit Tests & Benchmarks
@@ -189,16 +211,15 @@ deactivate
 
 ---
 
-## 🛠️ Common Troubleshooting
+## 🛠️ Architecture & Rate-Limit Mechanics
 
-### 1. `ModuleNotFoundError: No module named 'tkinter'`
-- **Linux (Ubuntu/Debian)**: Run `sudo apt install python3-tk`.
-- **Fedora/RHEL**: Run `sudo dnf install python3-tkinter`.
-- **Windows**: Rerun the Python installer from [python.org](https://www.python.org), select **Modify**, and verify **tcl/tk and IDLE** is checked.
+### 1. Three API Keys & Shared 40 RPM Limit
+- Because all 3 API keys belong to the same NVIDIA account, they share account-level and model-level quotas.
+- `NvidiaRateLimiter` implements a concurrency-safe sliding-window rate limiter that limits total outbound requests across all 3 keys to at most 40 requests per rolling 60 seconds.
+- Requests run in parallel whenever the shared limiter has available capacity, avoiding unnecessary serial waiting while strictly protecting against quota exhaustion.
 
-### 2. Rate Limit (HTTP 429) Handling
-- ResumeDrop automatically detects HTTP 429 rate limit responses, puts the exhausted key on a 60-second cooldown, and re-routes pending requests to the next active key in the pool.
-- Providing 2 or 3 distinct Groq keys provides 2x to 3x higher throughput with uninterrupted processing.
+### 2. Rate Limit (HTTP 429) & Cooldown Handling
+- If an HTTP 429 status code is received, ResumeDrop parses the `Retry-After` header or message, applies exponential backoff, pauses the exhausted key, and temporarily enforces a shared account cooldown to avoid retry storms.
 
 ### 3. File Formats Supported
 - **PDF**: Handled natively by `PyMuPDF` (`fitz`), preserving layout columns, tables, and multi-page text.

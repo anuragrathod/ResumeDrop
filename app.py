@@ -2,7 +2,7 @@
 app.py
 ======
 ResumeDrop — Modernized Streamlit Web Interface.
-Resume-to-Excel automation system with Multi-Key Groq Pool, parallel batch processing,
+Resume-to-Excel automation system with Multi-Key NVIDIA NIM Pool (40 RPM), parallel batch processing,
 Apple-inspired typography & zero-pill design, and formatted 5-sheet workbook export.
 """
 
@@ -46,12 +46,13 @@ from schemas.candidate import (
     WorkExperience,
 )
 from src.ai_extractor import (
-    DEFAULT_GROQ_MODEL,
+    DEFAULT_NVIDIA_MODEL,
+    FALLBACK_NVIDIA_MODELS,
     AIConfig,
     AIExtractor,
-    GroqKeyPool,
-    check_groq_available,
-    list_groq_models,
+    NvidiaKeyPool,
+    check_nvidia_available,
+    list_nvidia_models,
 )
 from src.document_reader import DocumentReader, DocumentResult, ProcessingStatus
 from src.excel_exporter import export_to_bytes
@@ -62,9 +63,10 @@ logging.basicConfig(level=logging.INFO)
 
 MAX_FILE_SIZE_MB = 10
 _AVAILABLE_MODELS = [
-    "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b",
-    "qwen/qwen3.8-27b",
+    "meta/llama-3.3-70b-instruct",
+    "nvidia/llama-3.1-nemotron-70b-instruct",
+    "deepseek-ai/deepseek-r1",
+    "mistralai/mistral-large-2-instruct",
 ]
 
 _STATUS_CONFIG = {
@@ -129,6 +131,40 @@ h3 { font-size: 1.25rem !important; font-weight: 600 !important; padding-top: 1.
     margin: 0 0 1.75rem 0;
     max-width: 42rem;
 }
+
+/* Top Navigation Bar */
+.rd-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 1.25rem;
+    margin-bottom: 1.5rem;
+    border-bottom: 1px solid var(--line);
+}
+.rd-nav-brand {
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    text-decoration: none;
+}
+.rd-nav-links {
+    display: flex;
+    gap: 1.25rem;
+}
+.rd-nav-link {
+    font-size: 0.92rem;
+    font-weight: 500;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color 0.15s ease;
+}
+.rd-nav-link:hover { color: var(--accent); }
+.rd-nav-link.active {
+    color: var(--accent);
+    font-weight: 600;
+}
+
 .rd-brand {
     font-size: 1.2rem;
     font-weight: 700;
@@ -258,7 +294,7 @@ def _init_state() -> None:
         "processed": False,
         "upload_key": 0,
         "edited": {},
-        "selected_model": DEFAULT_GROQ_MODEL,
+        "selected_model": DEFAULT_NVIDIA_MODEL,
         "custom_keys_text": "",
         "max_workers": 3,
         "rules_only": False,
@@ -286,37 +322,43 @@ def _reset_workspace() -> None:
 
 
 def _save_keys_to_env(keys_str: str) -> None:
-    """Save provided Groq keys to .env file for persistence."""
+    """Save provided NVIDIA keys to .env file for persistence."""
     env_file = Path(__file__).resolve().parent / ".env"
-    cleaned_keys = [k.strip() for k in re.split(r"[,;\s\n]+", keys_str) if k.strip().startswith("gsk_")]
+    cleaned_keys = [k.strip() for k in re.split(r"[,;\s\n]+", keys_str) if k.strip().startswith("nvapi-")]
     if not cleaned_keys:
         return
 
     joined = ", ".join(cleaned_keys)
     lines = []
-    found = False
+    found_keys = False
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
-            if line.startswith("GROQ_API_KEYS="):
-                lines.append(f"GROQ_API_KEYS={joined}")
-                found = True
-            elif line.startswith("GROQ_API_KEY=") and not found:
-                lines.append(f"GROQ_API_KEY={cleaned_keys[0]}")
+            if line.startswith("NVIDIA_API_KEYS="):
+                lines.append(f"NVIDIA_API_KEYS={joined}")
+                found_keys = True
+            elif line.startswith("NVIDIA_API_KEY_1=") and len(cleaned_keys) >= 1:
+                lines.append(f"NVIDIA_API_KEY_1={cleaned_keys[0]}")
+            elif line.startswith("NVIDIA_API_KEY_2=") and len(cleaned_keys) >= 2:
+                lines.append(f"NVIDIA_API_KEY_2={cleaned_keys[1]}")
+            elif line.startswith("NVIDIA_API_KEY_3=") and len(cleaned_keys) >= 3:
+                lines.append(f"NVIDIA_API_KEY_3={cleaned_keys[2]}")
             else:
                 lines.append(line)
-    if not found:
-        lines.append(f"GROQ_API_KEYS={joined}")
-        lines.append(f"GROQ_API_KEY={cleaned_keys[0]}")
+    if not found_keys:
+        lines.append(f"NVIDIA_API_KEYS={joined}")
+        for idx, k in enumerate(cleaned_keys[:3], start=1):
+            lines.append(f"NVIDIA_API_KEY_{idx}={k}")
 
     env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.environ["GROQ_API_KEYS"] = joined
-    os.environ["GROQ_API_KEY"] = cleaned_keys[0]
+    os.environ["NVIDIA_API_KEYS"] = joined
+    for idx, k in enumerate(cleaned_keys[:3], start=1):
+        os.environ[f"NVIDIA_API_KEY_{idx}"] = k
 
 
 @st.cache_resource(show_spinner=False)
-def _get_key_pool(keys_tuple: tuple[str, ...]) -> GroqKeyPool:
-    """Return a shared GroqKeyPool instance."""
-    pool = GroqKeyPool()
+def _get_key_pool(keys_tuple: tuple[str, ...]) -> NvidiaKeyPool:
+    """Return a shared NvidiaKeyPool instance."""
+    pool = NvidiaKeyPool()
     if keys_tuple:
         pool.set_keys(list(keys_tuple))
     else:
@@ -325,33 +367,71 @@ def _get_key_pool(keys_tuple: tuple[str, ...]) -> GroqKeyPool:
 
 
 # ---------------------------------------------------------------------------
-# Sidebar: Engine, Multi-Key Pool, Concurrency, Settings
+# API Key Discovery & Connection Verification on Load
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# API Key Discovery & Connection Verification on Load (No Sidebar)
-# ---------------------------------------------------------------------------
-env_keys_str = os.getenv("GROQ_API_KEYS") or os.getenv("GROQ_API_KEY") or ""
-current_keys_raw = st.session_state.custom_keys_text or env_keys_str
-parsed_keys = tuple(
-    k.strip() for k in re.split(r"[,;\s\n]+", current_keys_raw) if k.strip().startswith("gsk_")
-)
-pool = _get_key_pool(parsed_keys)
+def _discover_all_env_keys() -> list[str]:
+    """Discover all NVIDIA API keys from environment variables."""
+    keys: list[str] = []
+    # 1. Numbered keys NVIDIA_API_KEY_1, NVIDIA_API_KEY_2, NVIDIA_API_KEY_3
+    for i in range(1, 11):
+        k = os.getenv(f"NVIDIA_API_KEY_{i}", "").strip()
+        if k and k not in keys:
+            keys.append(k)
+    # 2. Comma/whitespace separated keys in NVIDIA_API_KEYS
+    val_multi = os.getenv("NVIDIA_API_KEYS", "").strip()
+    if val_multi:
+        for item in re.split(r"[,;\s\n]+", val_multi):
+            k = item.strip()
+            if k and k not in keys:
+                keys.append(k)
+    # 3. Single key fallback
+    single = os.getenv("NVIDIA_API_KEY", "").strip()
+    if single and single not in keys:
+        keys.append(single)
+    return keys
+
+
+if st.session_state.custom_keys_text.strip():
+    custom_keys = [
+        k.strip()
+        for k in re.split(r"[,;\s\n]+", st.session_state.custom_keys_text)
+        if k.strip().startswith("nvapi-")
+    ]
+    effective_keys = tuple(custom_keys) if custom_keys else tuple(_discover_all_env_keys())
+else:
+    effective_keys = tuple(_discover_all_env_keys())
+
+pool = _get_key_pool(effective_keys)
 
 # Verify API keys connectivity whenever app is loaded
 is_api_connected = False
 api_status_message = "No keys configured"
 if pool.total_count > 0:
-    is_api_connected, api_status_message = check_groq_available(pool)
+    is_api_connected, api_status_message = check_nvidia_available(pool)
 
 # Model selector list
-available_groq_models = list(_AVAILABLE_MODELS)
+available_nvidia_models = list(_AVAILABLE_MODELS)
 if is_api_connected and pool.total_count > 0:
-    fetched = list_groq_models(pool.keys[0].key)
+    fetched = list_nvidia_models(pool.keys[0].key)
     if fetched:
-        available_groq_models = fetched
+        available_nvidia_models = fetched
 
-if st.session_state.selected_model not in available_groq_models:
-    st.session_state.selected_model = available_groq_models[0]
+if st.session_state.selected_model not in available_nvidia_models:
+    st.session_state.selected_model = available_nvidia_models[0]
+
+# ---------------------------------------------------------------------------
+# Navigation Bar
+# ---------------------------------------------------------------------------
+st.markdown("""
+<div class="rd-nav">
+    <a href="/" target="_self" class="rd-nav-brand">ResumeDrop</a>
+    <div class="rd-nav-links">
+        <a href="/" target="_self" class="rd-nav-link active">Extractor</a>
+        <a href="/logs" target="_self" class="rd-nav-link">API Logs</a>
+        <a href="/e" target="_self" class="rd-nav-link">Raw Text</a>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 # Header Section & Top Action Controls
@@ -360,24 +440,83 @@ hdr_col, action_col = st.columns([4, 1], vertical_alignment="center")
 with hdr_col:
     st.markdown("""
     <h1 class="rd-title">Resume to Excel</h1>
-    <p class="rd-lede">Drop PDF, DOCX, or TXT resumes below. Candidate details are extracted into a formatted 5-worksheet Excel workbook you can review and edit first.</p>
+    <p class="rd-lede">Drop PDF, DOCX, or TXT resumes below. Candidate details are extracted via NVIDIA NIM into a formatted 5-worksheet Excel workbook you can review and edit first.</p>
     """, unsafe_allow_html=True)
 
 with action_col:
     if st.button("Reset workspace", key="main_reset_btn", use_container_width=True):
         _reset_workspace()
-    
+
     if st.button("Retest connection", key="retest_conn_btn", use_container_width=True):
-        with st.spinner("Testing API connection..."):
-            is_conn, msg = check_groq_available(pool)
+        with st.spinner("Testing NVIDIA NIM connection..."):
+            is_conn, msg = check_nvidia_available(pool)
             st.session_state["last_connection_test"] = (is_conn, msg)
 
 if "last_connection_test" in st.session_state:
     is_conn, msg = st.session_state["last_connection_test"]
     if is_conn:
-        st.success(f"Groq API Connected: {pool.active_count}/{pool.total_count} keys active · {msg}", icon="🟢")
+        st.success(f"NVIDIA NIM Connected: {pool.active_count}/{pool.total_count} keys active · max 40 RPM · {msg}", icon="🟢")
     else:
-        st.error(f"Groq API Connection Failed: {msg}", icon="🔴")
+        st.error(f"NVIDIA NIM Connection Failed: {msg}", icon="🔴")
+
+# ---------------------------------------------------------------------------
+# Key Pool Manager & NIM Settings Expander
+# ---------------------------------------------------------------------------
+with st.expander(f"⚙ NVIDIA NIM Key Pool & Settings ({pool.active_count}/{pool.total_count} keys active · max {pool.rate_limiter.max_requests} RPM)", expanded=False):
+    st.markdown("**Active Keys in Pool:**")
+    if pool.keys:
+        cols_disp = st.columns(len(pool.keys))
+        for idx, k_stat in enumerate(pool.keys):
+            with cols_disp[idx]:
+                st.markdown(
+                    f"**Key #{k_stat.index + 1}**  \n"
+                    f"`{k_stat.masked_key}`  \n"
+                    f"{'🟢 Ready' if k_stat.is_available else '🔴 Cooldown'} · {k_stat.total_calls} calls"
+                )
+    else:
+        st.warning("No API keys loaded. Provide your keys below.")
+
+    st.write("")
+    st.markdown("**Update NVIDIA API Keys:**")
+    col_k1, col_k2, col_k3 = st.columns(3)
+    k1_val = pool.keys[0].key if len(pool.keys) >= 1 else ""
+    k2_val = pool.keys[1].key if len(pool.keys) >= 2 else ""
+    k3_val = pool.keys[2].key if len(pool.keys) >= 3 else ""
+
+    with col_k1:
+        new_k1 = st.text_input("NVIDIA Key 1", value=k1_val, type="password", key="inp_key_1")
+    with col_k2:
+        new_k2 = st.text_input("NVIDIA Key 2", value=k2_val, type="password", key="inp_key_2")
+    with col_k3:
+        new_k3 = st.text_input("NVIDIA Key 3", value=k3_val, type="password", key="inp_key_3")
+
+    col_btn_save, col_model_sel = st.columns([1, 2])
+    with col_btn_save:
+        if st.button("Save & Update Keys", key="save_keys_btn", use_container_width=True):
+            updated_keys = [
+                k.strip()
+                for k in [new_k1, new_k2, new_k3]
+                if k.strip().startswith("nvapi-")
+            ]
+            if updated_keys:
+                _save_keys_to_env(", ".join(updated_keys))
+                st.session_state.custom_keys_text = ", ".join(updated_keys)
+                _get_key_pool.clear()
+                st.success(f"Saved {len(updated_keys)} keys to pool!")
+                st.rerun()
+            else:
+                st.error("Please enter valid keys starting with nvapi-")
+
+    with col_model_sel:
+        chosen_model = st.selectbox(
+            "Active NIM Model",
+            options=available_nvidia_models,
+            index=available_nvidia_models.index(st.session_state.selected_model) if st.session_state.selected_model in available_nvidia_models else 0,
+            key="model_selector_dropdown",
+        )
+        if chosen_model != st.session_state.selected_model:
+            st.session_state.selected_model = chosen_model
+            st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +623,7 @@ if process_clicked and uploaded_files and not st.session_state.processed:
             seen_hashes.add(doc.file_hash)
         doc_results.append(doc)
 
-    # Step 2: Parallel Batch Extraction across Groq Multi-Key Pool
+    # Step 2: Parallel Batch Extraction across NVIDIA NIM Multi-Key Pool
     progress_bar.progress(20, text=f"Extracting with {st.session_state.max_workers} parallel workers...")
     logs_holder: list[str] = []
 

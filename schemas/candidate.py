@@ -93,10 +93,10 @@ class ExtractionMetadata(BaseModel):
     """How the record was built: 'rules_only' | 'ai' | 'rules+ai' | 'none'"""
 
     model_used: Optional[str] = None
-    """The Groq model tag that was used, e.g. 'openai/gpt-oss-120b'."""
+    """The NVIDIA NIM model tag that was used, e.g. 'meta/llama-3.3-70b-instruct'."""
 
     key_index_used: Optional[int] = None
-    """Index of the Groq API key from the multi-key pool that handled this record."""
+    """Index of the NVIDIA API key from the multi-key pool that handled this record."""
 
     extracted_at: Optional[str] = None
     """ISO-8601 timestamp of extraction."""

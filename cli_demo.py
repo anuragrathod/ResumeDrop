@@ -5,7 +5,7 @@ Command-line text extraction and resume parsing tool for ResumeDrop.
 
 Features:
 - Fast document text extraction (PyMuPDF for PDF, python-docx for DOCX, MarkItDown/utf-8 for TXT)
-- Candidate structured extraction (Rule-based or AI-assisted via Groq pool)
+- Candidate structured extraction (Rule-based or AI-assisted via NVIDIA NIM pool)
 - 5-sheet styled Excel workbook export (Candidates, Education, Work Experience, Projects, Log)
 
 Usage:
@@ -42,7 +42,7 @@ def main() -> int:
     parser.add_argument("--dir", type=str, default="sample_resumes", help="Directory containing resumes (default: sample_resumes)")
     parser.add_argument("--extract", "-e", action="store_true", help="Perform structured entity extraction into CandidateRecord")
     parser.add_argument("--export", type=str, default=None, help="Export candidates to multi-sheet Excel file (.xlsx)")
-    parser.add_argument("--use-ai", action="store_true", help="Enable Groq AI extractor (uses GROQ_API_KEYS pool)")
+    parser.add_argument("--use-ai", action="store_true", help="Enable NVIDIA NIM AI extractor (uses NVIDIA_API_KEY_1..3 pool)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print detailed extracted fields / text preview")
     args = parser.parse_args()
 

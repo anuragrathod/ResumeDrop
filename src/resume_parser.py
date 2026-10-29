@@ -1,11 +1,11 @@
 """
 src/resume_parser.py
 ====================
-Phase 2: Rule-based extraction, orchestrator, and concurrent batch processing.
+Rule-based extraction, orchestrator, and concurrent batch processing.
 
 Coordinates:
 1. Rule-based extraction on cleaned text (email, phone, URLs).
-2. AI-based extraction via multi-key Groq extractor.
+2. AI-based extraction via multi-key NVIDIA NIM extractor.
 3. Merging results with priority rules.
 4. Validation and candidate normalization.
 5. Parallel batch processing across multiple worker threads.
@@ -364,7 +364,7 @@ def _merge_results(rule_data: dict, ai_data: dict) -> dict:
 
 
 class ResumeParser:
-    """Coordinates rule-based and multi-key Groq extraction for single or batch resumes."""
+    """Coordinates rule-based and multi-key NVIDIA NIM extraction for single or batch resumes."""
 
     def __init__(
         self,

@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from eval_data.dataset import DATASET
 from schemas.candidate import CandidateRecord
-from src.ai_extractor import AIExtractor, GroqKeyPool
+from src.ai_extractor import AIExtractor, NvidiaKeyPool
 from src.document_reader import DocumentResult, ProcessingStatus
 from src.resume_parser import ResumeParser
 
@@ -35,15 +35,15 @@ def main() -> int:
 
     ai_extractor = None
     if not args.rules_only:
-        pool = GroqKeyPool()
+        pool = NvidiaKeyPool()
         if pool.total_count > 0:
             ai_extractor = AIExtractor()
         else:
-            print("No Groq keys found — defaulting to rules-only evaluation.")
+            print("No NVIDIA API keys found — defaulting to rules-only evaluation.")
 
     resume_parser = ResumeParser(ai_extractor=ai_extractor)
 
-    print(f"Evaluating {len(items)} synthetic resume(s) (Engine: {'Rules-only' if not ai_extractor else 'Groq AI'})...\n")
+    print(f"Evaluating {len(items)} synthetic resume(s) (Engine: {'Rules-only' if not ai_extractor else 'NVIDIA NIM'})...\n")
 
     results = []
     field_scores = {

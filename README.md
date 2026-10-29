@@ -1,6 +1,6 @@
 # ResumeDrop — AI Resume Extraction & Excel Automation
 
-ResumeDrop is a 100% Python-native desktop automation suite that ingests batches of PDF, DOCX, and TXT resumes, extracts structured candidate records using a high-throughput multi-key Groq LPU pool (`llama-3.3-70b-versatile` / `llama-3.1-8b-instant`) with automatic HTTP 429 failover and rule-based regex fallback, validates the extracted data, and exports a professionally formatted 5-worksheet Excel workbook.
+ResumeDrop is a 100% Python-native desktop automation suite that ingests batches of PDF, DOCX, and TXT resumes, extracts structured candidate records using a high-throughput multi-key NVIDIA NIM pool (`meta/llama-3.3-70b-instruct`) with automatic HTTP 429 failover, shared 40 RPM rate limiting, and rule-based regex fallback, validates the extracted data, and exports a professionally formatted 5-worksheet Excel workbook.
 
 ---
 
@@ -8,7 +8,9 @@ ResumeDrop is a 100% Python-native desktop automation suite that ingests batches
 
 - **Pure Python Architecture**: Built exclusively with Python (no TypeScript/Node.js). Zero npm dependencies.
 - **Modern Tkinter Desktop GUI (`gui.py`)**: Native cross-platform desktop application featuring multi-file queueing, real-time progress tracking, candidate review and inline editing, API pool health monitoring, and 1-click Excel export.
-- **Multi-Key Groq LPU Pool**: Thread-safe round-robin key manager (`GroqKeyPool`) supporting 1 to 3+ Groq API keys with automatic HTTP 429 rate-limit failover and cooldown tracking.
+- **Multi-Key NVIDIA NIM Pool**: Thread-safe key manager (`NvidiaKeyPool`) supporting 3 NVIDIA API keys belonging to the same account with automatic load distribution and failover.
+- **Shared Concurrency-Safe Rate Limiter**: Strictly enforces a global budget of up to 40 requests per rolling minute across all 3 keys combined, preventing account-wide throttling and retry storms.
+- **OpenAI-Compatible NVIDIA NIM Endpoint**: Powered by `https://integrate.api.nvidia.com/v1` using official Free Endpoint models like `meta/llama-3.3-70b-instruct` (128k context length, high-accuracy structured JSON output).
 - **Python-Only Document Parsing**: Layout-aware text extraction via `PyMuPDF` (`fitz`) and `python-docx` without heavy 4 GB+ PyTorch or Docling bloat (~250 MB total environment).
 - **Rule-Based Hybrid Fallback**: Regex extraction for emails, international phones (+1, +44, +91, Indian 10-digit mobile, UK formats), LinkedIn, GitHub, and portfolios. Fully functional offline.
 - **Data Validation & Sanitization**: Validates graduation years (1950–2035), suppresses duplicate degrees, and neutralizes Excel formula injections (`=`, `+`, `-`, `@`, `\t`, `\r` prefixed with `'`).
@@ -44,26 +46,32 @@ pip install -r requirements.txt
 
 ### 2. Configure Environment
 
-Copy `.env.example` to `.env` and insert your Groq API key(s):
+Copy `.env.example` to `.env` and configure your 3 NVIDIA API keys:
 
 ```bash
 cp .env.example .env
 ```
 
 ```env
-# Multi-key pool (1, 2, or 3 keys for high throughput and rate-limit redundancy)
-GROQ_API_KEY_1=gsk_your_key_1
-GROQ_API_KEY_2=gsk_your_key_2
-GROQ_API_KEY_3=gsk_your_key_3
+# 3 NVIDIA API keys from the same account (https://build.nvidia.com/)
+NVIDIA_API_KEY_1=nvapi-your_first_key_here
+NVIDIA_API_KEY_2=nvapi-your_second_key_here
+NVIDIA_API_KEY_3=nvapi-your_third_key_here
 
-DEFAULT_GROQ_MODEL=llama-3.3-70b-versatile
-MAX_WORKERS=4
+# Selected model and rate limit
+DEFAULT_NVIDIA_MODEL=meta/llama-3.3-70b-instruct
+NVIDIA_RATE_LIMIT_RPM=40
+MAX_WORKERS=3
 ```
 
-### 3. Launch Desktop GUI
+### 3. Launch Desktop GUI or Web App
 
 ```bash
+# Launch Tkinter Desktop GUI:
 python gui.py
+
+# Or launch Streamlit web application:
+bash run_dev.sh
 ```
 
 ### 4. Or Run CLI Batch Tool
@@ -79,7 +87,7 @@ python cli_demo.py --dir sample_resumes --extract --export output/candidates.xls
 
 ### Desktop GUI (`gui.py`)
 - **Batch Queue**: Drag or add multiple resume files or entire directories.
-- **Worker Concurrency**: Select background worker thread count (1–8) and target Groq model.
+- **Worker Concurrency**: Select background worker thread count (1–8) and target NVIDIA model.
 - **Interactive Review**: Double-click any candidate in the Treeview table to inspect validation issues, review raw document snippets, and edit fields prior to export.
 - **Excel Export**: Save structured workbooks anywhere on your filesystem.
 
@@ -96,16 +104,16 @@ python cli_demo.py --dir sample_resumes --extract --export output/candidates.xls
 Run the automated test suite:
 
 ```bash
-# Run 20 unit and integration tests
+# Run unit and integration tests
 pytest
 
 # Run tests with code coverage
 pytest --cov=src tests/
 
-# Run extraction throughput benchmark (>900 resumes/sec)
+# Run extraction throughput benchmark (>800 resumes/sec)
 python scripts/benchmark.py
 
-# Run accuracy evaluation against 25 ground-truth synthetic resumes
+# Run accuracy evaluation against synthetic resumes
 python scripts/evaluate_extraction.py
 ```
 
@@ -118,13 +126,13 @@ ResumeDrop/
 ├── gui.py                      # Pure Python Tkinter modern desktop GUI application
 ├── cli_demo.py                 # Standalone CLI batch extraction & export tool
 ├── app.py                      # Streamlit web application
-├── requirements.txt            # Pinned, tested Python dependencies
+├── requirements.txt            # Pinned, tested Python dependencies (openai, pydantic, pymupdf, etc.)
 ├── SETUP.md                    # Windows (PowerShell) and Linux setup manual
 ├── PROJECT_AUDIT.md            # Comprehensive architecture & engineering audit
-├── .env.example                # Multi-key Groq environment template
+├── .env.example                # 3-key NVIDIA NIM environment template
 ├── .gitignore                  # Pure Python ignore rules
 ├── eval_data/
-│   └── dataset.py              # 25 synthetic resumes with ground-truth labels
+│   └── dataset.py              # Synthetic resumes with ground-truth labels
 ├── sample_resumes/             # Sample PDF and DOCX test resumes
 ├── schemas/
 │   └── candidate.py            # Canonical Pydantic v2 data models
@@ -132,13 +140,13 @@ ResumeDrop/
 │   ├── benchmark.py            # Extraction throughput benchmarking script
 │   └── evaluate_extraction.py  # Precision/recall accuracy evaluation script
 ├── src/
-│   ├── ai_extractor.py         # Multi-key GroqKeyPool with failover & LLM parser
+│   ├── ai_extractor.py         # Multi-key NvidiaKeyPool with shared 40 RPM rate limiter & NIM parser
 │   ├── document_reader.py      # PyMuPDF, python-docx, and MarkItDown text reader
 │   ├── excel_exporter.py       # 5-worksheet openpyxl styled Excel builder
 │   ├── resume_parser.py        # Rule-based regex parser & parallel batch orchestrator
 │   ├── utils.py                # Text normalization, hashing, and signature validation
 │   └── validator.py            # Post-extraction validation & formula sanitization
-└── tests/                      # Pytest suite (reader, parser, groq pool, excel, app)
+└── tests/                      # Pytest suite (reader, parser, nvidia pool, excel, app)
 ```
 
 ---
@@ -146,5 +154,5 @@ ResumeDrop/
 ## 🔒 Security
 
 - **Formula Injection Prevention**: Cell contents starting with `=`, `@`, `+`, `-`, `\t`, or `\r` are safely escaped with a leading single quote `'`.
-- **Zero Credential Leakage**: API keys reside solely in environment variables and are never exported to workbooks or logs.
+- **Zero Credential Leakage**: API keys reside solely in environment variables, are masked as `nvapi-***` in logs, and are never exported to workbooks.
 - **Safe Document Ingestion**: Native Python readers prevent macro execution, shell spawning, and external entity resolution.

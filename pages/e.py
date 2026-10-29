@@ -44,13 +44,44 @@ st.markdown("""
 .stApp { background: var(--bg); color: var(--text); }
 [data-testid="stSidebar"], [data-testid="collapsedControl"], section[data-testid="stSidebar"] { display: none !important; }
 .block-container { max-width: 1080px; padding: 2rem 2rem 4rem !important; }
-.rd-back { color: var(--accent); text-decoration: none; font-size: 0.9rem; font-weight: 500; }
-.rd-back:hover { text-decoration: underline; }
+/* Navigation */
+.rd-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 1.25rem;
+    margin-bottom: 1.5rem;
+    border-bottom: 1px solid var(--line);
+}
+.rd-nav-brand {
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    text-decoration: none;
+}
+.rd-nav-links {
+    display: flex;
+    gap: 1.25rem;
+}
+.rd-nav-link {
+    font-size: 0.92rem;
+    font-weight: 500;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color 0.15s ease;
+}
+.rd-nav-link:hover { color: var(--accent); }
+.rd-nav-link.active {
+    color: var(--accent);
+    font-weight: 600;
+}
+
 .rd-title {
     font-size: clamp(2rem, 4vw, 2.5rem);
     font-weight: 700;
     letter-spacing: -0.03em;
-    margin: 0.75rem 0 0.25rem 0;
+    margin: 0.25rem 0 0.25rem 0;
     color: var(--text);
 }
 .rd-lede { font-size: 1rem; color: var(--muted); margin: 0 0 1.5rem 0; }
@@ -65,7 +96,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown("""
-<a class="rd-back" href="/" target="_self">← ResumeDrop</a>
+<div class="rd-nav">
+    <a href="/" target="_self" class="rd-nav-brand">ResumeDrop</a>
+    <div class="rd-nav-links">
+        <a href="/" target="_self" class="rd-nav-link">Extractor</a>
+        <a href="/logs" target="_self" class="rd-nav-link">API Logs</a>
+        <a href="/e" target="_self" class="rd-nav-link active">Raw Text</a>
+    </div>
+</div>
 <h1 class="rd-title">Extracted text</h1>
 <p class="rd-lede">Upload a resume to inspect the exact text extracted from it by DocumentReader.</p>
 """, unsafe_allow_html=True)

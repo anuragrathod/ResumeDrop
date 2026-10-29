@@ -8,7 +8,7 @@ Features:
 - Pure Python desktop interface (Windows & Linux compatible)
 - Multi-file & folder batch queue (PDF, DOCX, TXT)
 - Multi-threaded non-blocking extraction worker with progress bar
-- Multi-key Groq LPU pool integration with automatic failover
+- Multi-key NVIDIA NIM pool (3 keys, 40 RPM limit) with automatic failover
 - Structured candidate Treeview table with status indicators
 - Candidate Detail & Inline Review modal
 - 5-Worksheet styled Excel (.xlsx) export
@@ -33,7 +33,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from schemas.candidate import CandidateRecord
-from src.ai_extractor import AIExtractor, GroqKeyPool
+from src.ai_extractor import AIExtractor, NvidiaKeyPool
 from src.document_reader import DocumentReader, DocumentResult, ProcessingStatus
 from src.excel_exporter import export_to_file
 from src.resume_parser import ResumeParser
@@ -60,7 +60,7 @@ class ResumeDropApp:
 
         # Engine instances
         self.doc_reader = DocumentReader()
-        self.key_pool = GroqKeyPool.from_env()
+        self.key_pool = NvidiaKeyPool.from_env()
         self.ai_extractor: Optional[AIExtractor] = None
 
         # Build styles and UI
@@ -155,13 +155,18 @@ class ResumeDropApp:
         self.lbl_pool_status.pack(side=tk.LEFT, padx=12)
 
         ttk.Label(config_frame, text="Model:").pack(side=tk.LEFT, padx=4)
-        self.model_var = tk.StringVar(value=os.getenv("DEFAULT_GROQ_MODEL", "llama-3.3-70b-versatile"))
+        self.model_var = tk.StringVar(value=os.getenv("DEFAULT_NVIDIA_MODEL", "meta/llama-3.3-70b-instruct"))
         self.model_combo = ttk.Combobox(
             config_frame,
             textvariable=self.model_var,
-            values=["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192"],
+            values=[
+                "meta/llama-3.3-70b-instruct",
+                "nvidia/llama-3.1-nemotron-70b-instruct",
+                "deepseek-ai/deepseek-r1",
+                "mistralai/mistral-large-2-instruct",
+            ],
             state="readonly",
-            width=24,
+            width=28,
         )
         self.model_combo.pack(side=tk.LEFT, padx=4)
 
@@ -306,14 +311,14 @@ class ResumeDropApp:
 
         def _check_bg() -> None:
             try:
-                from src.ai_extractor import check_groq_available
-                is_connected, msg = check_groq_available(self.key_pool)
+                from src.ai_extractor import check_nvidia_available
+                is_connected, msg = check_nvidia_available(self.key_pool)
                 if is_connected:
-                    self.ui_queue.put(("pool_status", f"API Keys: Connected ({self.key_pool.active_count}/{self.key_pool.total_count} active)", self.success_color))
+                    self.ui_queue.put(("pool_status", f"NVIDIA NIM: Connected ({self.key_pool.active_count}/{self.key_pool.total_count} active)", self.success_color))
                 else:
-                    self.ui_queue.put(("pool_status", "API Keys: Offline / Fallback", self.warning_color))
+                    self.ui_queue.put(("pool_status", "NVIDIA NIM: Offline / Fallback", self.warning_color))
             except Exception:
-                self.ui_queue.put(("pool_status", "API Keys: Offline (Rule-Based)", self.warning_color))
+                self.ui_queue.put(("pool_status", "NVIDIA NIM: Offline (Rule-Based)", self.warning_color))
 
         threading.Thread(target=_check_bg, daemon=True).start()
 
@@ -383,7 +388,7 @@ class ResumeDropApp:
 
         # Initialize AI extractor if keys are present
         try:
-            self.key_pool = GroqKeyPool.from_env()
+            self.key_pool = NvidiaKeyPool.from_env()
             self.ai_extractor = AIExtractor(
                 pool=self.key_pool,
                 default_model=self.model_var.get(),
